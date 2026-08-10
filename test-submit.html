@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>BargaiNest Waitlist Test</title>
+</head>
+
+<body>
+
+<h2>BargaiNest Waitlist Test</h2>
+
+<form id="testForm">
+
+    <input
+        type="text"
+        id="name"
+        placeholder="Name"
+        value="Test User"
+    >
+
+    <br><br>
+
+    <input
+        type="email"
+        id="email"
+        placeholder="Email"
+        value="test@example.com"
+    >
+
+    <br><br>
+
+    <button type="submit">
+        Test Submission
+    </button>
+
+</form>
+
+<pre id="result"></pre>
+
+
+<script>
+
+document.getElementById('testForm').addEventListener(
+    'submit',
+    async function(e) {
+
+        e.preventDefault();
+
+        const resultBox =
+            document.getElementById('result');
+
+        resultBox.textContent =
+            'Submitting...';
+
+
+        try {
+
+            const response = await fetch(
+                'join.php',
+                {
+                    method: 'POST',
+
+                    headers: {
+                        'Content-Type':
+                            'application/json'
+                    },
+
+                    body: JSON.stringify({
+                        name:
+                            document.getElementById('name').value,
+
+                        email:
+                            document.getElementById('email').value
+                    })
+                }
+            );
+
+
+            const text =
+                await response.text();
+
+
+            resultBox.textContent =
+                'HTTP ' +
+                response.status +
+                '\n\n' +
+                text;
+
+
+        } catch(error) {
+
+            resultBox.textContent =
+                'ERROR:\n' +
+                error;
+
+        }
+
+    }
+);
+
+</script>
+
+</body>
+</html>
