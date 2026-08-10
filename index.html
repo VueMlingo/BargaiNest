@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BargainNest — Store. Shop. Save.</title>
+<title>BargaiNest — Store. Shop. Save.</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -386,7 +386,7 @@
         <div class="tagline-strip">
           <span>Store.</span><span>Shop.</span><span>Save.</span>
         </div>
-        <p class="lede">BargainNest brings your loyalty, rewards, promotions, and real-time price comparison together in one place — so you always know what's worth using, and where it's genuinely cheapest.</p>
+        <p class="lede">BargaiNest brings your loyalty, rewards, promotions, and real-time price comparison together in one place — so you always know what's worth using, and where it's genuinely cheapest.</p>
         <a href="#waitlist" class="hero-cta">Get early access</a>
       </div>
       <div>
@@ -502,12 +502,12 @@
       <div class="feature">
         <span class="idx">04</span>
         <h3>Receipt-smart</h3>
-        <p>Scan a receipt and BargainNest checks it against what you should have earned — automatically.</p>
+        <p>Scan a receipt and BargaiNest checks it against what you should have earned — automatically.</p>
       </div>
       <div class="feature">
         <span class="idx">05</span>
         <h3>Smart shopping lists</h3>
-        <p>Build a list once and BargainNest tells you where each item is cheapest, factoring in your loyalty rewards — not just shelf price.</p>
+        <p>Build a list once and BargaiNest tells you where each item is cheapest, factoring in your loyalty rewards — not just shelf price.</p>
       </div>
       <div class="feature">
         <span class="idx">06</span>
@@ -526,7 +526,7 @@
       <div>
         <span class="eyebrow">Early access</span>
         <h2>Be first into the nest.</h2>
-        <p>We're building BargainNest in Cape Town right now. Join the waitlist and you'll be first to try it — and first to tell us what we got wrong.</p>
+        <p>We're building BargaiNest in Cape Town right now. Join the waitlist and you'll be first to try it — and first to tell us what we got wrong.</p>
         <div class="count-line" id="countLine"></div>
       </div>
       <div>
@@ -560,6 +560,7 @@
     <div class="footer-meta">
       <span class="muted">Cape Town, South Africa</span>
       <span class="muted">Store. Shop. Save.</span>
+      <span>© <span data-year>2026</span> Anthill Solutions (Pty) Ltd. All rights reserved.</span>
     </div>
   </div>
 </footer>
@@ -572,58 +573,183 @@
   const statusMsg = document.getElementById('statusMsg');
   const countLine = document.getElementById('countLine');
 
-  async function refreshCount(){
-    try{
-      const result = await window.storage.list('waitlist:', true);
-      const n = result && result.keys ? result.keys.length : 0;
-      if(n > 0){
-        countLine.textContent = n === 1 ? '1 person has already joined' : n + ' people have already joined';
-      } else {
-        countLine.textContent = 'Be the very first to join';
+  // Update waitlist count
+  async function refreshCount() {
+    try {
+      const response = await fetch('join.php?action=count', {
+        method: 'GET',
+        cache: 'no-store'
+      });
+
+      if (!response.ok) {
+        throw new Error('Unable to retrieve waitlist count.');
       }
-    }catch(e){
+
+      const result = await response.json();
+      const count = Number(result.count || 0);
+
+      if (count === 0) {
+        countLine.textContent = 'Be the very first to join';
+      } else if (count === 1) {
+        countLine.textContent = '1 person has already joined';
+      } else {
+        countLine.textContent =
+          count + ' people have already joined';
+      }
+
+    } catch (error) {
+      console.error('Waitlist count error:', error);
       countLine.textContent = '';
     }
   }
 
-  form.addEventListener('submit', async (e) => {
+
+  // Submit waitlist form
+  form.addEventListener('submit', async function(e) {
+
     e.preventDefault();
+
     const name = nameInput.value.trim();
     const email = emailInput.value.trim();
-    if(!name || !email) return;
 
+
+    // Validate name
+    if (!name) {
+
+      statusMsg.textContent =
+        'Please enter your name.';
+
+      statusMsg.className =
+        'status-msg err';
+
+      nameInput.focus();
+
+      return;
+    }
+
+
+    // Validate email
+    if (!email) {
+
+      statusMsg.textContent =
+        'Please enter your email address.';
+
+      statusMsg.className =
+        'status-msg err';
+
+      emailInput.focus();
+
+      return;
+    }
+
+
+    // Validate email format
+    const emailPattern =
+      /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailPattern.test(email)) {
+
+      statusMsg.textContent =
+        'Please enter a valid email address.';
+
+      statusMsg.className =
+        'status-msg err';
+
+      emailInput.focus();
+
+      return;
+    }
+
+
+    // Disable button while submitting
     submitBtn.disabled = true;
     submitBtn.textContent = 'Joining...';
+
     statusMsg.textContent = '';
     statusMsg.className = 'status-msg';
 
-    try{
-      const key = 'waitlist:' + Date.now() + '-' + Math.random().toString(36).slice(2,8);
-      const result = await window.storage.set(key, JSON.stringify({
-        name: name,
-        email: email,
-        joinedAt: new Date().toISOString()
-      }), true);
 
-      if(result){
-        statusMsg.textContent = "You're on the list. We'll be in touch.";
-        statusMsg.classList.add('ok');
+    try {
+
+      const response = await fetch(
+        'join.php',
+        {
+          method: 'POST',
+
+          headers: {
+            'Content-Type':
+              'application/json'
+          },
+
+          body: JSON.stringify({
+            name: name,
+            email: email
+          })
+        }
+      );
+
+
+      const result =
+        await response.json();
+
+
+      // Successful registration
+      if (
+        response.ok &&
+        result.success
+      ) {
+
+        statusMsg.textContent =
+          result.message ||
+          "You're on the list. We'll be in touch.";
+
+        statusMsg.className =
+          'status-msg ok';
+
         form.reset();
+
         await refreshCount();
-      } else {
-        throw new Error('no result');
+
       }
-    }catch(err){
-      statusMsg.textContent = 'Something went wrong — please try again.';
-      statusMsg.classList.add('err');
-    }finally{
+
+      // Error returned by PHP
+      else {
+
+        throw new Error(
+          result.message ||
+          'Something went wrong. Please try again.'
+        );
+
+      }
+
+
+    } catch (error) {
+
+      console.error(
+        'Waitlist submission error:',
+        error
+      );
+
+      statusMsg.textContent =
+        error.message ||
+        'Something went wrong — please try again.';
+
+      statusMsg.className =
+        'status-msg err';
+
+
+    } finally {
+
       submitBtn.disabled = false;
       submitBtn.textContent = 'Join';
+
     }
+
   });
 
+
+  // Load count when page opens
   refreshCount();
-</script>
 
 </body>
 </html>
