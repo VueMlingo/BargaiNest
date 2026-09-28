@@ -1,0 +1,141 @@
+import {
+  IntelligenceDecision,
+  PriceComparisonInput,
+} from "./intelligence-engine.types.js";
+
+export function detectBetterPrice(
+  input: PriceComparisonInput
+): IntelligenceDecision {
+  if (!input.alternatives.length) {
+    return {
+      detected: false,
+    };
+  }
+
+  const validAlternatives = input.alternatives.filter(
+    (alternative) =>
+      Number.isFinite(alternative.price) &&
+      alternative.price >= 0 &&
+      alternative.retailerId !== input.currentRetailerId &&
+      alternative.currency === input.currency
+  );
+
+  if (!validAlternatives.length) {
+    return {
+      detected: false,
+    };
+  }
+
+  const bestAlternative = validAlternatives.reduce((best, current) =>
+    current.price < best.price ? current : best
+  );
+
+  const saving = input.currentPrice - bestAlternative.price;
+
+  if (saving <= 0) {
+    return {
+      detected: false,
+    };
+  }
+
+  const savingPercentage =
+    input.currentPrice > 0
+      ? (saving / input.currentPrice) * 100
+      : 0;
+
+  /*
+   * --------------------------------------------------------------------------
+   * INTELLIGENCE SCORE
+   * --------------------------------------------------------------------------
+   *
+   * Score is standardised to a 0-100 scale.
+   *
+   * The current Release 3 baseline gives the saving percentage a direct
+   * contribution, capped at 100.
+   *
+   * Examples:
+   *
+   *   5% saving  -> 5 score
+   *   12% saving -> 12 score
+   *   25% saving -> 25 score
+   *
+   * This gives us a simple deterministic baseline which can later be enhanced
+   * with price freshness, observation quality and retailer coverage.
+   * --------------------------------------------------------------------------
+   */
+
+  const score = Math.min(100, Math.max(0, savingPercentage));
+
+  /*
+   * --------------------------------------------------------------------------
+   * CONFIDENCE
+   * --------------------------------------------------------------------------
+   *
+   * Confidence is now represented consistently as 0-100.
+   *
+   * For the current deterministic engine, a valid current price and a valid
+   * alternative price provide a baseline confidence of 100.
+   *
+   * Later releases can reduce this based on observation age, source quality,
+   * conflicting observations, etc.
+   * --------------------------------------------------------------------------
+   */
+
+  const confidence = 100;
+
+  return {
+    detected: true,
+    type: "BETTER_PRICE",
+
+    title: `Save ${formatCurrency(
+      saving,
+      input.currency
+    )} on ${input.productName}`,
+
+    description: `${input.productName} is available for ${
+      bestAlternative.price
+    } ${input.currency} at ${
+      bestAlternative.retailerName ?? "another retailer"
+    }, compared with ${
+      input.currentPrice
+    } ${input.currency} at ${
+      input.currentRetailerName ?? "the current retailer"
+    }.`,
+
+    currentPrice: roundMoney(input.currentPrice),
+
+    alternativePrice: roundMoney(bestAlternative.price),
+
+    estimatedSaving: roundMoney(saving),
+
+    currency: input.currency,
+
+    alternativeRetailerId: bestAlternative.retailerId,
+
+    alternativeRetailerName:
+      bestAlternative.retailerName ?? "another retailer",
+
+    score: roundScore(score),
+
+    confidence,
+
+    reason: `A lower observed price exists at ${
+      bestAlternative.retailerName ?? "another retailer"
+    }.`,
+  };
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function formatCurrency(
+  value: number,
+  currency: string
+): string {
+  return `${roundMoney(value).toFixed(2)} ${currency}`;
+}

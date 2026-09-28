@@ -1,0 +1,147 @@
+import type {
+  CataloguePriceLookupAdapter,
+  CataloguePriceLookupContext,
+  CataloguePriceLookupQuery,
+} from "../retail-catalogue.price-lookup.types.js";
+import type { RawCatalogueItem } from "../retail-catalogue.types.js";
+
+/**
+ * Pick n Pay's OWN commerce backend (SAP Hybris/OCC, path prefix
+ * "pnphybris") exposes a product search endpoint that takes an
+ * explicit `storeCode` and returns that specific store's real price
+ * directly -- no ambiguous multi-variation guessing needed the way
+ * Constructor.io's response requires (see
+ * CONSTRUCTOR-IO-PRICE-LOOKUP.md's "store-variation problem").
+ *
+ * CONFIRMED LIVE (2026-09-21): this endpoint works as a plain
+ * server-to-server POST with no session cookie, no auth token,
+ * nothing -- verified via scripts/probe-pnp-hybris.mjs against the
+ * real endpoint with storeCode "WC21". The store code format itself
+ * ("WC21") matches exactly the store-availability codes seen in
+ * Constructor.io's `variations[].data.availability` facet for the
+ * same product, confirming both paths reference the same underlying
+ * store identifiers.
+ *
+ * Field names below (`price.value`, `price.oldPrice`,
+ * `price.savings`, `productDisplayBadges`) are taken directly from a
+ * real captured response for product code "000000000000349246_CS"
+ * ("PnP UHT Full Cream Milk 6 x 1L") at store WC21 -- not
+ * third-party research, not guessed.
+ */
+
+const PNP_HYBRIS_SEARCH_URL = "https://www.pnp.co.za/pnphybris/v2/pnp-spa/products/search";
+
+// Confirmed live: this exact field list is what the real captured
+// request used. Trimmed down to only what this adapter actually
+// reads would risk missing a field the endpoint requires to be asked
+// for before it includes price/promotion data at all -- kept as
+// captured rather than guessing which subset is safe to drop.
+const PNP_HYBRIS_FIELDS =
+  "products(variantMatrix(FULL),productIdForTracking,sponsoredProduct,onlineSalesAdId,onlineSalesExtendedAdId,code,name,brandSellerId,averageWeight,summary,price(FULL),images(DEFAULT),stock(FULL),averageRating,numberOfReviews,variantOptions,maxOrderQuantity,productDisplayBadges(DEFAULT),allowedQuantities(DEFAULT),available,quantityType,defaultQuantityOfUom,inStockIndicator,defaultUnitOfMeasure,potentialPromotions(FULL),categoryNames),facets,breadcrumbs,pagination(DEFAULT),sorts(DEFAULT),freeTextSearch,currentQuery,responseJson,seoCategoryContent,seoCategoryTitle,refinedContent,categoryDescription,keywordRedirectUrl";
+
+interface PnpHybrisPrice {
+  value?: number;
+  oldPrice?: number;
+  savings?: number;
+  currencyIso?: string;
+}
+
+interface PnpHybrisProductDisplayBadge {
+  displayName?: string;
+}
+
+interface PnpHybrisProduct {
+  code?: string;
+  name?: string;
+  price?: PnpHybrisPrice;
+  productDisplayBadges?: PnpHybrisProductDisplayBadge[];
+  available?: boolean;
+}
+
+interface PnpHybrisSearchResponse {
+  products?: PnpHybrisProduct[];
+}
+
+export class PnpHybrisPriceLookupAdapter implements CataloguePriceLookupAdapter {
+  readonly adapterKey = "PICK_N_PAY_LIVE_SEARCH";
+
+  constructor(private readonly defaultStoreCode?: string) {}
+
+  async lookup(
+    _context: CataloguePriceLookupContext,
+    query: CataloguePriceLookupQuery,
+  ): Promise<RawCatalogueItem[]> {
+    const searchText = query.name;
+    if (!searchText) return [];
+
+    const storeCode = query.storeCode ?? this.defaultStoreCode;
+    if (!storeCode) throw new Error("PNP_HYBRIS_STORE_CODE_REQUIRED");
+
+    const url = new URL(PNP_HYBRIS_SEARCH_URL);
+    url.searchParams.set("fields", PNP_HYBRIS_FIELDS);
+    url.searchParams.set("query", searchText);
+    url.searchParams.set("pageSize", "20");
+    url.searchParams.set("storeCode", storeCode);
+    url.searchParams.set("lang", "en");
+    url.searchParams.set("curr", "ZAR");
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; BargaiNest price lookup)",
+      },
+      body: "{}",
+    });
+
+    if (!response.ok) {
+      throw new Error(`PNP_HYBRIS_REQUEST_FAILED:${response.status}`);
+    }
+
+    const body = (await response.json()) as PnpHybrisSearchResponse;
+    const products = body.products ?? [];
+
+    const items: RawCatalogueItem[] = [];
+    for (const product of products) {
+      const item = toRawCatalogueItem(product);
+      if (item) items.push(item);
+    }
+
+    return items;
+  }
+}
+
+function toRawCatalogueItem(product: PnpHybrisProduct): RawCatalogueItem | null {
+  const price = product.price;
+  if (!price || typeof price.value !== "number") return null;
+
+  // A real, explicit numeric field -- confirmed live -- rather than a
+  // string-based flag like Constructor.io's misleading
+  // priceConditionType (which was "PROMOTION" on almost everything,
+  // discounted or not; see CONSTRUCTOR-IO-PRICE-LOOKUP.md). savings
+  // being a genuine positive number is a direct, reliable signal.
+  const hasRealSavings = typeof price.savings === "number" && price.savings > 0;
+  const wasPrice = hasRealSavings && typeof price.oldPrice === "number" ? price.oldPrice : null;
+
+  const badgeNames = (product.productDisplayBadges ?? [])
+    .map((badge) => badge.displayName)
+    .filter((name): name is string => typeof name === "string" && name.length > 0);
+  const promotionText = hasRealSavings && badgeNames.length > 0 ? badgeNames.join(", ") : null;
+
+  return {
+    ...(product.code ? { externalId: product.code } : {}),
+    name: typeof product.name === "string" ? product.name : "",
+    price: price.value,
+    ...(wasPrice !== null ? { wasPrice } : {}),
+    currency: price.currencyIso ?? "ZAR",
+    isPromotion: hasRealSavings,
+    ...(promotionText !== null ? { promotionText } : {}),
+    // Confirmed as an "API" extraction (structured JSON from Pick n
+    // Pay's own real backend), not WEB_PARSER -- this is not HTML
+    // scraping.
+    extractionMethod: "API" as RawCatalogueItem["extractionMethod"],
+    extractionConfidence: 0.95,
+    rawData: product as unknown as Record<string, unknown>,
+  };
+}

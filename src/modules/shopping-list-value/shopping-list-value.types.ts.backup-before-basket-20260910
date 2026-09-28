@@ -1,0 +1,50 @@
+export interface ShoppingListValueItem {
+  itemId: string;
+  description: string;
+  quantity: number;
+  targetPrice: number | null;
+
+  productId: string | null;
+  productName: string | null;
+
+  comparable: boolean;
+
+  bestPrice: number | null;
+  bestRetailerId: string | null;
+  bestRetailerName: string | null;
+  bestObservedAt: Date | null;
+  bestCurrency: string | null;
+
+  lineValue: number | null;
+  potentialSaving: number | null;
+
+  targetStatus:
+    | "BELOW_TARGET"
+    | "AT_TARGET"
+    | "ABOVE_TARGET"
+    | "NO_TARGET"
+    | "NO_PRICE";
+
+  confidence: number | null;
+}
+
+export interface ShoppingListValueSummary {
+  itemsAnalysed: number;
+  itemsWithoutProduct: number;
+  itemsWithoutPrice: number;
+  comparableItems: number;
+
+  bestKnownBasketValue: number;
+  potentialSavings: number;
+
+  currency: string | null;
+}
+
+export interface ShoppingListValueResult {
+  shoppingListId: string;
+  shoppingListName: string;
+
+  items: ShoppingListValueItem[];
+
+  summary: ShoppingListValueSummary;
+}

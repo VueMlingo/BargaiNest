@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# Local databases / temporary files
+*.sqlite
+*.sqlite3
+*.db
+tmp/
+temp/
+
+# Cloud SQL Proxy
+cloud-sql-proxy
+
+# Test / coverage output
+coverage/
+.nyc_output/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local backup files
+*.backup
+*.bak
+*.old
+
+# Historical local Dockerfile backups
+Dockerfile.before-*

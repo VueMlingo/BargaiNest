@@ -1,0 +1,7 @@
+ALTER TABLE `user_profiles`
+  ADD COLUMN `province` VARCHAR(191) NULL,
+  ADD COLUMN `suburb` VARCHAR(191) NULL,
+  ADD COLUMN `postalCode` VARCHAR(191) NULL,
+  ADD COLUMN `latitude` DOUBLE NULL,
+  ADD COLUMN `longitude` DOUBLE NULL,
+  ADD COLUMN `pnpStoreCode` VARCHAR(191) NULL;

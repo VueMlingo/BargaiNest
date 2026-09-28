@@ -1,0 +1,187 @@
+import type { FastifyInstance } from "fastify";
+
+import { z } from "zod";
+
+import {
+  LoyaltyCardStatus,
+  Prisma,
+} from "@prisma/client";
+
+const createLoyaltyCardSchema = z.object({
+  loyaltyAccountId: z.string().uuid(),
+  cardNumber: z.string().trim().min(1),
+  status: z.nativeEnum(LoyaltyCardStatus).optional(),
+  issuedAt: z.coerce.date().optional(),
+  expiresAt: z.coerce.date().optional(),
+});
+
+export async function registerLoyaltyCardRoutes(
+  api: FastifyInstance
+): Promise<void> {
+  /*
+   * --------------------------------------------------------------------------
+   * CREATE LOYALTY CARD
+   * --------------------------------------------------------------------------
+   */
+
+  api.post("/loyalty-cards", async (request, reply) => {
+    const body = createLoyaltyCardSchema.parse(request.body ?? {});
+
+    const loyaltyAccount = await api.prisma.loyaltyAccount.findUnique({
+      where: {
+        id: body.loyaltyAccountId,
+      },
+    });
+
+    if (!loyaltyAccount) {
+      return reply.code(404).send({
+        error: "LOYALTY_ACCOUNT_NOT_FOUND",
+        message: "Loyalty account was not found",
+      });
+    }
+
+    try {
+      const card = await api.prisma.loyaltyCard.create({
+        data: {
+          loyaltyAccountId: body.loyaltyAccountId,
+          cardNumber: body.cardNumber,
+          status: body.status ?? LoyaltyCardStatus.ACTIVE,
+          issuedAt: body.issuedAt ?? null,
+          expiresAt: body.expiresAt ?? null,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return reply.code(201).send(card);
+    } catch (error) {
+      /*
+       * Prisma P2002 = unique constraint violation.
+       *
+       * loyalty_cards.cardNumber is intentionally unique in the database.
+       * Instead of allowing this to become a generic HTTP 500, expose a
+       * meaningful API response to the frontend.
+       */
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        return reply.code(409).send({
+          error: "LOYALTY_CARD_ALREADY_EXISTS",
+          message: "A loyalty card with this card number already exists",
+          field: "cardNumber",
+        });
+      }
+
+      /*
+       * Re-throw unexpected database errors so Fastify's existing error
+       * handling and logging continue to work normally.
+       */
+      throw error;
+    }
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST ALL LOYALTY CARDS
+   * --------------------------------------------------------------------------
+   */
+
+  api.get("/loyalty-cards", async () => {
+    return api.prisma.loyaltyCard.findMany({
+      orderBy: {
+        createdAt: "desc",
+      },
+      include: {
+        loyaltyAccount: {
+          include: {
+            loyaltyProgram: {
+              include: {
+                retailer: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * GET LOYALTY CARD
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{ Params: { cardId: string } }>(
+    "/loyalty-cards/:cardId",
+    async (request, reply) => {
+      const card = await api.prisma.loyaltyCard.findUnique({
+        where: {
+          id: request.params.cardId,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!card) {
+        return reply.code(404).send({
+          error: "LOYALTY_CARD_NOT_FOUND",
+          message: "Loyalty card was not found",
+        });
+      }
+
+      return card;
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST CARDS FOR LOYALTY ACCOUNT
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{ Params: { loyaltyAccountId: string } }>(
+    "/loyalty-accounts/:loyaltyAccountId/cards",
+    async (request, reply) => {
+      const loyaltyAccount = await api.prisma.loyaltyAccount.findUnique({
+        where: {
+          id: request.params.loyaltyAccountId,
+        },
+      });
+
+      if (!loyaltyAccount) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACCOUNT_NOT_FOUND",
+          message: "Loyalty account was not found",
+        });
+      }
+
+      return api.prisma.loyaltyCard.findMany({
+        where: {
+          loyaltyAccountId: request.params.loyaltyAccountId,
+        },
+        orderBy: {
+          createdAt: "asc",
+        },
+      });
+    }
+  );
+}

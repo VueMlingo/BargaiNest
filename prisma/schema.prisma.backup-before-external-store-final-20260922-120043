@@ -1,0 +1,1248 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model SystemHealth {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  @@map("system_health")
+}
+
+model User {
+  id                        String                    @id @default(uuid())
+  status                    UserStatus                @default(ACTIVE)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  intelligenceEvents        IntelligenceEvent[]
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  loyaltyAccounts           LoyaltyAccount[]
+  recommendations           Recommendation[]
+  shoppingLists             ShoppingList[]
+  transactions              ShoppingTransaction[]
+  identifiers               UserIdentifier[]
+  credential                UserCredential?
+  sessions                  AuthSession[]
+  profile                   UserProfile?
+  passwordResetTokens       PasswordResetToken[]
+  emailVerificationTokens   EmailVerificationToken[]
+  consents                  UserConsent[]
+  notifications             Notification[]
+  notificationPreference    NotificationPreference?
+  supportRequests           SupportRequest[]
+  ownedHouseholds           Household[]              @relation("HouseholdOwner")
+  householdMemberships      HouseholdMember[]
+  rewardRedemptions         RewardRedemption[]
+  auditLogs                 AuditLog[]
+  purchases                 Purchase[]
+
+  @@map("users")
+}
+
+model UserIdentifier {
+  id        String             @id @default(uuid())
+  userId    String
+  type      UserIdentifierType
+  value     String
+  verified  Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([type, value])
+  @@index([userId])
+  @@map("user_identifiers")
+}
+
+model Retailer {
+  id                        String                    @id @default(uuid())
+  name                      String
+  code                      String                    @unique
+  status                    RetailerStatus            @default(ACTIVE)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  loyaltyPrograms           LoyaltyProgram[]
+  priceObservations         PriceObservation[]
+  products                  ProductRetailer[]
+  recommendations           Recommendation[]
+  branches                  RetailerBranch[]
+  transactions              ShoppingTransaction[]
+  integrations              Integration[]
+  catalogueSources          CatalogueSource[]
+
+  @@map("retailers")
+}
+
+model RetailerBranch {
+  id         String         @id @default(uuid())
+  retailerId String
+  name       String
+  address    String?
+  latitude   Decimal?
+  longitude  Decimal?
+  status     RetailerStatus @default(ACTIVE)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  retailer   Retailer       @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([retailerId])
+  @@map("retailer_branches")
+}
+
+model LoyaltyProgram {
+  id         String               @id @default(uuid())
+  retailerId String
+  name       String
+  code       String
+  status     LoyaltyProgramStatus @default(ACTIVE)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  accounts   LoyaltyAccount[]
+  retailer   Retailer             @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@unique([retailerId, code])
+  @@index([retailerId])
+  @@map("loyalty_programs")
+}
+
+model LoyaltyAccount {
+  id                  String               @id @default(uuid())
+  userId              String
+  loyaltyProgramId    String
+  pointsBalance       Decimal              @default(0.000000000000000000000000000000)
+  status              LoyaltyAccountStatus @default(ACTIVE)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  accountNumber       String?
+  loyaltyProgram      LoyaltyProgram       @relation(fields: [loyaltyProgramId], references: [id], onDelete: Cascade)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities          LoyaltyActivity[]
+  cards               LoyaltyCard[]
+  rewards             Reward[]
+  retailerConnections RetailerConnection[]
+  snapshots           LoyaltySnapshot[]
+  redemptions         RewardRedemption[]
+
+  /*
+   * Previously @@unique([userId, loyaltyProgramId]) — hard-blocked a
+   * user from ever having two accounts on the same loyalty programme,
+   * contradicting FR-WAL-005 ("system shall support multiple cards
+   * from the same retailer when allowed", e.g. a spouse's separate
+   * Shoprite membership). Widened to include accountNumber: this
+   * still prevents adding the exact same membership number twice
+   * (MySQL treats NULL as distinct per row for uniqueness, so accounts
+   * created without an accountNumber aren't affected either way), but
+   * allows genuinely different membership numbers for the same
+   * programme.
+   */
+  @@unique([userId, loyaltyProgramId, accountNumber])
+  @@index([userId])
+  @@index([loyaltyProgramId])
+  @@map("loyalty_accounts")
+}
+
+model LoyaltyCard {
+  id               String            @id @default(uuid())
+  loyaltyAccountId String
+  cardNumber       String            @unique
+  status           LoyaltyCardStatus @default(ACTIVE)
+  issuedAt         DateTime?
+  expiresAt        DateTime?
+  /*
+   * Previously device-local only (a plain localStorage flag in the
+   * frontend, keyed by card id) -- meant favouriting a card on one
+   * device never showed up on another, and the "persist" call meant
+   * to save it to localStorage was actually a dead no-op stub, so it
+   * didn't even survive a page refresh on the SAME device. Moved
+   * server-side so it's a real, synced property of the card.
+   */
+  favourite        Boolean           @default(false)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  loyaltyAccount   LoyaltyAccount    @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@map("loyalty_cards")
+}
+
+model LoyaltyActivity {
+  id               String              @id @default(uuid())
+  loyaltyAccountId String
+  type             LoyaltyActivityType
+  reference        String?
+  description      String?
+  occurredAt       DateTime            @default(now())
+  createdAt        DateTime            @default(now())
+  points           Decimal             @default(0.000000000000000000000000000000)
+  loyaltyAccount   LoyaltyAccount      @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([occurredAt])
+  @@map("loyalty_activities")
+}
+
+model Reward {
+  id               String         @id @default(uuid())
+  loyaltyAccountId String
+  type             RewardType
+  status           RewardStatus   @default(AVAILABLE)
+  description      String?
+  value            Decimal?
+  expiresAt        DateTime?
+  redeemedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  pointsRequired   Decimal?
+  title            String
+  loyaltyAccount   LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([status])
+  @@map("rewards")
+}
+
+model Product {
+  id                        String                      @id @default(uuid())
+  name                      String
+  description               String?
+  brand                     String?
+  category                  String?
+  unit                      String?
+  status                    ProductStatus               @default(ACTIVE)
+  createdAt                 DateTime                    @default(now())
+  updatedAt                 DateTime                    @updatedAt
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  priceObservations         PriceObservation[]
+  catalogueMatches          CatalogueItemProductMatch[]
+  identifiers               ProductIdentifier[]
+  retailers                 ProductRetailer[]
+  recommendations           Recommendation[]
+  shoppingListItems         ShoppingListItem[]
+  transactionItems          ShoppingTransactionItem[]
+
+  @@index([name])
+  @@index([category])
+  @@map("products")
+}
+
+model ProductIdentifier {
+  id        String                @id @default(uuid())
+  productId String
+  type      ProductIdentifierType
+  value     String
+  createdAt DateTime              @default(now())
+  product   Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([type, value])
+  @@index([productId])
+  @@map("product_identifiers")
+}
+
+model ProductRetailer {
+  id           String   @id @default(uuid())
+  productId    String
+  retailerId   String
+  retailerSku  String?
+  currentPrice Decimal?
+  currency     String   @default("ZAR")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer     Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, retailerId])
+  @@index([retailerId])
+  @@map("product_retailers")
+}
+
+model PriceObservation {
+  id               String                     @id @default(uuid())
+  productId        String
+  retailerId       String
+  price            Decimal
+  currency         String                     @default("ZAR")
+  observedAt       DateTime                   @default(now())
+  source           String?
+  sourceReference  String?
+  channel          CatalogueChannel?
+  validFrom        DateTime?
+  validUntil       DateTime?
+  isPromotion      Boolean                    @default(false)
+  promotionText    String?
+  confidence       Decimal?
+  extractionMethod CatalogueExtractionMethod?
+  catalogueItemId  String?
+  createdAt        DateTime                   @default(now())
+  product          Product                    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer         Retailer                   @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  catalogueItem    CatalogueItem?             @relation(fields: [catalogueItemId], references: [id], onDelete: SetNull)
+
+  @@index([productId, observedAt])
+  @@index([retailerId, observedAt])
+  @@index([catalogueItemId])
+  @@index([validUntil])
+  @@map("price_observations")
+}
+
+model CatalogueSource {
+  id                  String              @id @default(uuid())
+  retailerId          String
+  code                String              @unique
+  name                String
+  channel             CatalogueChannel
+  sourceType          CatalogueSourceType
+  sourceUrl           String?
+  description         String?
+  active              Boolean             @default(true)
+  schedule            String?
+  adapterKey          String?
+  region              String?
+  countryCode         String?
+  province            String?
+  city                String?
+  storeCode           String?
+  sourcePriority      Int                 @default(100)
+  lastSuccessfulRunAt DateTime?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  retailer            Retailer            @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  runs                CatalogueRun[]
+
+  @@index([retailerId])
+  @@index([channel])
+  @@index([sourceType])
+  @@index([active])
+  @@index([countryCode])
+  @@index([province])
+  @@index([city])
+  @@index([storeCode])
+  @@map("catalogue_sources")
+}
+
+model CatalogueRun {
+  id                String             @id @default(uuid())
+  catalogueSourceId String
+  status            CatalogueRunStatus
+  startedAt         DateTime           @default(now())
+  completedAt       DateTime?
+  retrievedAt       DateTime?
+  sourceVersion     String?
+  sourceChecksum    String?
+  sourceReference   String?
+  itemsDiscovered   Int                @default(0)
+  itemsProcessed    Int                @default(0)
+  itemsMatched      Int                @default(0)
+  itemsUnmatched    Int                @default(0)
+  errorMessage      String?
+  metadata          Json?
+  createdAt         DateTime           @default(now())
+  catalogueSource   CatalogueSource    @relation(fields: [catalogueSourceId], references: [id], onDelete: Cascade)
+  items             CatalogueItem[]
+
+  @@index([catalogueSourceId, startedAt])
+  @@index([status])
+  @@map("catalogue_runs")
+}
+
+model CatalogueItem {
+  id                   String                      @id @default(uuid())
+  catalogueRunId       String
+  externalId           String?
+  retailerSku          String?
+  gtin                 String?
+  barcode              String?
+  rawName              String
+  normalizedName       String?
+  brand                String?
+  packSize             String?
+  unit                 String?
+  category             String?
+  price                Decimal?
+  wasPrice             Decimal?
+  currency             String                      @default("ZAR")
+  isPromotion          Boolean                     @default(false)
+  promotionText        String?
+  validFrom            DateTime?
+  validUntil           DateTime?
+  sourceReference      String?
+  extractionMethod     CatalogueExtractionMethod
+  extractionConfidence Decimal?
+  rawData              Json?
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+  catalogueRun         CatalogueRun                @relation(fields: [catalogueRunId], references: [id], onDelete: Cascade)
+  matches              CatalogueItemProductMatch[]
+  priceObservations    PriceObservation[]
+
+  @@index([catalogueRunId])
+  @@index([externalId])
+  @@index([retailerSku])
+  @@index([gtin])
+  @@index([barcode])
+  @@index([normalizedName])
+  @@index([validUntil])
+  @@map("catalogue_items")
+}
+
+model CatalogueItemProductMatch {
+  id              String               @id @default(uuid())
+  catalogueItemId String
+  productId       String
+  confidence      Decimal
+  method          CatalogueMatchMethod
+  reason          String?
+  status          CatalogueMatchStatus @default(PROPOSED)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  catalogueItem   CatalogueItem        @relation(fields: [catalogueItemId], references: [id], onDelete: Cascade)
+  product         Product              @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([catalogueItemId, productId])
+  @@index([productId])
+  @@index([confidence])
+  @@index([status])
+  @@map("catalogue_item_product_matches")
+}
+
+model ShoppingList {
+  id          String             @id @default(uuid())
+  userId      String
+  name        String
+  status      ShoppingListStatus @default(ACTIVE)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  completedAt DateTime?
+  items       ShoppingListItem[]
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("shopping_lists")
+}
+
+model ShoppingListItem {
+  id             String                 @id @default(uuid())
+  shoppingListId String
+  quantity       Decimal                @default(1.000000000000000000000000000000)
+  targetPrice    Decimal?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  description    String
+  productId      String?
+  status         ShoppingListItemStatus @default(ACTIVE)
+  product        Product?               @relation(fields: [productId], references: [id])
+  shoppingList   ShoppingList           @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+
+  @@index([shoppingListId])
+  @@index([productId])
+  @@map("shopping_list_items")
+}
+
+model ShoppingTransaction {
+  id                   String                    @id @default(uuid())
+  userId               String
+  retailerId           String?
+  status               TransactionStatus         @default(COMPLETED)
+  transactionReference String?
+  subtotal             Decimal?
+  discount             Decimal?
+  total                Decimal?
+  currency             String                    @default("ZAR")
+  purchasedAt          DateTime                  @default(now())
+  createdAt            DateTime                  @default(now())
+  items                ShoppingTransactionItem[]
+  retailer             Retailer?                 @relation(fields: [retailerId], references: [id])
+  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purchasedAt])
+  @@index([retailerId, purchasedAt])
+  @@map("shopping_transactions")
+}
+
+model ShoppingTransactionItem {
+  id            String              @id @default(uuid())
+  transactionId String
+  productId     String?
+  description   String
+  quantity      Decimal             @default(1.000000000000000000000000000000)
+  unitPrice     Decimal?
+  discount      Decimal?
+  totalPrice    Decimal?
+  createdAt     DateTime            @default(now())
+  product       Product?            @relation(fields: [productId], references: [id])
+  transaction   ShoppingTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@index([productId])
+  @@map("shopping_transaction_items")
+}
+
+model IntelligenceSignal {
+  id         String                   @id @default(uuid())
+  userId     String?
+  productId  String?
+  retailerId String?
+  type       IntelligenceSignalType
+  status     IntelligenceSignalStatus @default(ACTIVE)
+  signalKey  String
+  value      Decimal?
+  confidence Decimal?
+  metadata   Json?
+  observedAt DateTime                 @default(now())
+  expiresAt  DateTime?
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+  product    Product?                 @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer   Retailer?                @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user       User?                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([productId, type])
+  @@index([retailerId, type])
+  @@index([status])
+  @@index([signalKey])
+  @@map("intelligence_signals")
+}
+
+model IntelligenceOpportunity {
+  id               String            @id @default(uuid())
+  userId           String?
+  productId        String?
+  retailerId       String?
+  type             OpportunityType
+  status           OpportunityStatus @default(OPEN)
+  title            String
+  description      String?
+  estimatedSaving  Decimal?
+  currentPrice     Decimal?
+  alternativePrice Decimal?
+  currency         String            @default("ZAR")
+  score            Decimal?
+  confidence       Decimal?
+  metadata         Json?
+  detectedAt       DateTime          @default(now())
+  expiresAt        DateTime?
+  viewedAt         DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  product          Product?          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer         Retailer?         @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user             User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([productId, type])
+  @@index([retailerId, type])
+  @@index([status])
+  @@index([detectedAt])
+  @@map("intelligence_opportunities")
+}
+
+model Recommendation {
+  id          String               @id @default(uuid())
+  userId      String
+  productId   String?
+  retailerId  String?
+  type        RecommendationType
+  status      RecommendationStatus @default(GENERATED)
+  title       String
+  description String?
+  score       Decimal?
+  confidence  Decimal?
+  reason      String?
+  metadata    Json?
+  generatedAt DateTime             @default(now())
+  expiresAt   DateTime?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  product     Product?             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer    Retailer?            @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, type])
+  @@index([productId])
+  @@index([retailerId])
+  @@index([generatedAt])
+  @@map("recommendations")
+}
+
+model IntelligenceEvent {
+  id         String                @id @default(uuid())
+  userId     String?
+  type       IntelligenceEventType
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime              @default(now())
+  user       User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([entityType, entityId])
+  @@map("intelligence_events")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserIdentifierType {
+  EMAIL
+  PHONE
+  EXTERNAL
+}
+
+enum RetailerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum LoyaltyProgramStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum LoyaltyAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  EXPIRED
+}
+
+enum LoyaltyCardStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  REPLACED
+}
+
+enum LoyaltyActivityType {
+  EARN
+  REDEEM
+  BONUS
+  ADJUSTMENT
+  EXPIRY
+  REVERSAL
+  OTHER
+}
+
+enum RewardType {
+  POINTS
+  DISCOUNT
+  VOUCHER
+  CASHBACK
+  BENEFIT
+  OTHER
+}
+
+enum RewardStatus {
+  AVAILABLE
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProductIdentifierType {
+  SKU
+  BARCODE
+  GTIN
+  PLU
+  EXTERNAL
+}
+
+enum ShoppingListStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum ShoppingListItemStatus {
+  ACTIVE
+  PURCHASED
+  REMOVED
+}
+
+enum TransactionStatus {
+  COMPLETED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum IntelligenceSignalType {
+  PRICE
+  PURCHASE
+  LOYALTY
+  REWARD
+  SHOPPING
+  SAVING
+  PREFERENCE
+  BEHAVIOUR
+  RETAILER
+  PRODUCT
+  OTHER
+}
+
+enum IntelligenceSignalStatus {
+  ACTIVE
+  PROCESSED
+  EXPIRED
+  DISMISSED
+}
+
+enum OpportunityType {
+  BETTER_PRICE
+  LOYALTY_BENEFIT
+  REWARD
+  BASKET_SAVING
+  PRODUCT_SUBSTITUTION
+  RETAILER_COMPARISON
+  SHOPPING_OPTIMISATION
+  PRICE_DROP
+  OTHER
+}
+
+enum OpportunityStatus {
+  OPEN
+  VIEWED
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+  COMPLETED
+}
+
+enum RecommendationType {
+  PRODUCT
+  RETAILER
+  OFFER
+  LOYALTY
+  SAVING
+  SHOPPING_LIST
+  BASKET
+  OTHER
+}
+
+enum RecommendationStatus {
+  GENERATED
+  VIEWED
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+  COMPLETED
+}
+
+enum IntelligenceEventType {
+  SIGNAL_CREATED
+  SIGNAL_PROCESSED
+  OPPORTUNITY_CREATED
+  OPPORTUNITY_VIEWED
+  OPPORTUNITY_ACCEPTED
+  OPPORTUNITY_DISMISSED
+  RECOMMENDATION_CREATED
+  RECOMMENDATION_VIEWED
+  RECOMMENDATION_ACCEPTED
+  RECOMMENDATION_DISMISSED
+  OTHER
+}
+
+model UserCredential {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_credentials")
+}
+
+/*
+ * BRS Section 15 explicitly requires auditing authentication, profile
+ * changes, card additions, and consent changes. Deliberately scoped
+ * to exactly those named categories rather than instrumenting every
+ * endpoint in the app -- see AUDIT-LOGGING.md for the precise list of
+ * what is and isn't covered.
+ */
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum PurchaseSource {
+  RECEIPT_SCAN
+  MANUAL
+}
+
+/*
+ * BN-028: purchase/transaction history. Two entry paths -- a scanned
+ * receipt (source RECEIPT_SCAN, via the OCR/parsing/verification
+ * pipeline) or a manually logged purchase (source MANUAL) for users
+ * who'd rather type it in, or for retailers/receipts the OCR pipeline
+ * doesn't yet handle well. Both land in the same table -- history
+ * doesn't care how an entry got there.
+ */
+model Purchase {
+  id           String         @id @default(uuid())
+  userId       String
+  retailerName String?
+  totalAmount  Decimal?
+  purchasedAt  DateTime       @default(now())
+  source       PurchaseSource @default(MANUAL)
+  createdAt    DateTime       @default(now())
+
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items PurchaseItem[]
+
+  @@index([userId])
+  @@index([purchasedAt])
+  @@map("purchases")
+}
+
+model PurchaseItem {
+  id                   String   @id @default(uuid())
+  purchaseId           String
+  name                 String
+  price                Decimal
+  /* Populated when BN-044's verification matched this item to a
+   * current promotion at scan time -- a point-in-time record, not a
+   * live link (the promotion itself isn't persisted anywhere; it was
+   * fetched live from BN-027 at the moment of scanning). */
+  matchedPromotionName String?
+  paidPromoPrice       Boolean?
+
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  @@index([purchaseId])
+  @@map("purchase_items")
+}
+
+model AuthSession {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+/*
+ * Mirrors AuthSession's proven pattern: only a hash of the token is
+ * ever stored, never the raw value -- the raw token exists only in
+ * the one-time email link sent to the user. usedAt makes a token
+ * single-use (checked, not just relied on for cleanup); expiresAt
+ * bounds how long a stale, unused reset link stays valid.
+ */
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("email_verification_tokens")
+}
+
+enum ConsentType {
+  MARKETING_COMMUNICATIONS
+  DATA_PROCESSING
+  THIRD_PARTY_SHARING
+}
+
+/*
+ * Current-state only (one row per user per consent type, upserted on
+ * change) -- not a full historical audit trail of every grant/revoke.
+ * A complete history belongs to the separate audit-logging backlog
+ * item (BN-020), which is designed to capture changes across the
+ * whole app, not just consent. Duplicating that here would mean two
+ * competing "what changed and when" records for the same data.
+ */
+model UserConsent {
+  id        String      @id @default(uuid())
+  userId    String
+  type      ConsentType
+  granted   Boolean     @default(false)
+  updatedAt DateTime    @updatedAt
+  createdAt DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type])
+  @@map("user_consents")
+}
+
+enum HouseholdMemberStatus {
+  INVITED
+  ACTIVE
+  REMOVED
+}
+
+model Household {
+  id          String            @id @default(uuid())
+  name        String
+  ownerUserId String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  owner   User              @relation("HouseholdOwner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  members HouseholdMember[]
+
+  @@index([ownerUserId])
+  @@map("households")
+}
+
+/*
+ * `userId` is nullable: an invite can be sent to an email address
+ * before that person has a BargaiNest account at all. It's linked
+ * once they register/log in with a matching email and accept.
+ */
+model HouseholdMember {
+  id          String                @id @default(uuid())
+  householdId String
+  email       String
+  userId      String?
+  status      HouseholdMemberStatus @default(INVITED)
+  invitedAt   DateTime              @default(now())
+  joinedAt    DateTime?
+  removedAt   DateTime?
+
+  household Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([householdId, email])
+  @@index([householdId])
+  @@index([userId])
+  @@map("household_members")
+}
+
+enum NotificationType {
+  REWARD_EXPIRY
+  GENERAL
+}
+
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  userId    String
+  type      NotificationType
+  channel   NotificationChannel
+  status    NotificationStatus  @default(PENDING)
+  title     String
+  body      String
+  createdAt DateTime            @default(now())
+  sentAt    DateTime?
+  readAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("notifications")
+}
+
+/*
+ * One row per user, upserted -- these are current settings, not a
+ * history of changes to them.
+ */
+model NotificationPreference {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  emailEnabled       Boolean  @default(true)
+  rewardExpiryAlerts Boolean  @default(true)
+  weeklyDigest       Boolean  @default(false)
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+enum SupportRequestStatus {
+  OPEN
+  RESOLVED
+}
+
+/*
+ * userId is nullable so a logged-out visitor can still submit a
+ * support request (e.g. "I can't log in") -- the one case where
+ * requiring authentication first would be actively unhelpful.
+ */
+model SupportRequest {
+  id        String                @id @default(uuid())
+  userId    String?
+  email     String
+  subject   String
+  message   String
+  status    SupportRequestStatus  @default(OPEN)
+  createdAt DateTime              @default(now())
+  resolvedAt DateTime?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@map("support_requests")
+}
+
+enum RetailerConnectionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+  DISCONNECTED
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  DEVELOPMENT
+  DEPRECATED
+}
+
+model Integration {
+  id          String            @id @default(uuid())
+  retailerId  String
+  code        String            @unique
+  name        String
+  status      IntegrationStatus @default(DEVELOPMENT)
+  description String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  retailer            Retailer             @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  retailerConnections RetailerConnection[]
+
+  @@index([retailerId])
+  @@index([status])
+  @@map("integrations")
+}
+
+model RetailerConnection {
+  id                String                   @id @default(uuid())
+  loyaltyAccountId  String
+  integrationId     String
+  status            RetailerConnectionStatus @default(PENDING)
+  externalAccountId String?
+  connectedAt       DateTime?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+  integration    Integration    @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([loyaltyAccountId, integrationId])
+  @@index([loyaltyAccountId])
+  @@index([integrationId])
+  @@index([status])
+  @@map("retailer_connections")
+}
+
+model LoyaltySnapshot {
+  id               String   @id @default(uuid())
+  loyaltyAccountId String
+  balance          Decimal  @default(0.000000000000000000000000000000)
+  source           String?
+  sourceReference  String?
+  observedAt       DateTime
+  syncedAt         DateTime
+  createdAt        DateTime @default(now())
+
+  /*
+   * The provider's getSnapshot() already returns activities, rewards,
+   * vouchers and offers alongside balance — but syncConnection() only
+   * ever persisted the balance, discarding the rest. These columns
+   * fix that. Kept as JSON rather than normalised tables for now
+   * (matching the pilot's pragmatic scope) — a production-grade
+   * schema would likely want dedicated LoyaltyReward/LoyaltyVoucher
+   * tables with their own redemption-status lifecycle.
+   */
+  /*
+   * Previously discarded: the provider's getSnapshot() already
+   * fetches account data (including tier, where the programme has
+   * one) via getAccount(), but the sync service only ever persisted
+   * balance/activities/rewards/vouchers/offers -- tier was fetched
+   * and thrown away on every single sync. Same pattern already found
+   * and fixed five times elsewhere in this codebase.
+   */
+  tier String?
+
+  activitiesJson Json?
+  rewardsJson    Json?
+  vouchersJson   Json?
+  offersJson     Json?
+
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([observedAt])
+  @@map("loyalty_snapshots")
+}
+
+enum RedemptionKind {
+  REWARD
+  VOUCHER
+}
+
+/*
+ * Local record of "the user told us they used this" -- necessary
+ * because the mock provider's snapshot JSON is fully OVERWRITTEN on
+ * every sync, so there's nowhere in the synced data itself to persist
+ * a redemption across syncs. A real provider integration would
+ * eventually reflect a redemption via its own API; until then, this
+ * is the honest interim source of truth, layered on top of whatever
+ * the last sync reported (see loyalty-consumer-read.service.ts).
+ */
+model RewardRedemption {
+  id               String         @id @default(uuid())
+  userId           String
+  loyaltyAccountId String
+  externalId       String
+  kind             RedemptionKind
+  redeemedAt       DateTime       @default(now())
+
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([loyaltyAccountId, externalId, kind])
+  @@index([userId])
+  @@map("reward_redemptions")
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  firstName String?
+  lastName  String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+enum CatalogueChannel {
+  PHYSICAL_CATALOGUE
+  ONLINE_STORE
+  DELIVERY_APP
+  API
+  FEED
+  OTHER
+}
+
+enum CatalogueSourceType {
+  WEB_PAGE
+  PDF
+  API
+  JSON_FEED
+  CSV_FEED
+  OTHER
+}
+
+enum CatalogueRunStatus {
+  RUNNING
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+enum CatalogueExtractionMethod {
+  STRUCTURED
+  PDF_TEXT
+  PDF_OCR
+  WEB_PARSER
+  API
+  FEED
+  MANUAL_REVIEW
+}
+
+enum CatalogueMatchMethod {
+  GTIN
+  BARCODE
+  RETAILER_SKU
+  EXACT_NAME
+  NORMALIZED_NAME
+  BRAND_NAME_SIZE
+  FUZZY
+  SEMANTIC
+  MANUAL
+}
+
+enum CatalogueMatchStatus {
+  PROPOSED
+  CONFIRMED
+  REJECTED
+}

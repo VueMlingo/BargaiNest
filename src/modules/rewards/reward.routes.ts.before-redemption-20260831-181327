@@ -1,0 +1,235 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { RewardStatus, RewardType } from "@prisma/client";
+
+const createRewardSchema = z.object({
+  type: z.nativeEnum(RewardType),
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1).optional(),
+  value: z.coerce.number().optional(),
+  pointsRequired: z.coerce.number().optional(),
+  expiresAt: z.coerce.date().optional(),
+  status: z.nativeEnum(RewardStatus).optional(),
+});
+
+const updateRewardSchema = z.object({
+  status: z.nativeEnum(RewardStatus).optional(),
+  redeemedAt: z.coerce.date().nullable().optional(),
+  description: z.string().trim().min(1).optional(),
+  value: z.coerce.number().optional(),
+  expiresAt: z.coerce.date().nullable().optional(),
+  pointsRequired: z.coerce.number().optional(),
+});
+
+export async function registerRewardRoutes(
+  api: FastifyInstance
+): Promise<void> {
+  /*
+   * --------------------------------------------------------------------------
+   * LIST ALL REWARDS
+   * --------------------------------------------------------------------------
+   */
+
+  api.get("/rewards", async () => {
+    return api.prisma.reward.findMany({
+      orderBy: {
+        createdAt: "desc",
+      },
+      include: {
+        loyaltyAccount: {
+          include: {
+            loyaltyProgram: {
+              include: {
+                retailer: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * GET REWARD
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{ Params: { rewardId: string } }>(
+    "/rewards/:rewardId",
+    async (request, reply) => {
+      const reward = await api.prisma.reward.findUnique({
+        where: {
+          id: request.params.rewardId,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!reward) {
+        return reply.code(404).send({
+          error: "REWARD_NOT_FOUND",
+          message: "Reward was not found",
+        });
+      }
+
+      return reward;
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * CREATE REWARD
+   * --------------------------------------------------------------------------
+   */
+
+  api.post<{
+    Params: { loyaltyAccountId: string };
+  }>(
+    "/loyalty-accounts/:loyaltyAccountId/rewards",
+    async (request, reply) => {
+      const body = createRewardSchema.parse(request.body ?? {});
+
+      const loyaltyAccount =
+        await api.prisma.loyaltyAccount.findUnique({
+          where: {
+            id: request.params.loyaltyAccountId,
+          },
+        });
+
+      if (!loyaltyAccount) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACCOUNT_NOT_FOUND",
+          message: "Loyalty account was not found",
+        });
+      }
+
+      const reward = await api.prisma.reward.create({
+        data: {
+          loyaltyAccountId: request.params.loyaltyAccountId,
+          type: body.type,
+          title: body.title,
+          ...(body.description !== undefined && { description: body.description }),
+          ...(body.value !== undefined && { value: body.value }),
+          ...(body.pointsRequired !== undefined && { pointsRequired: body.pointsRequired }),
+          ...(body.expiresAt !== undefined && { expiresAt: body.expiresAt }),
+          status: body.status ?? RewardStatus.AVAILABLE,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return reply.code(201).send(reward);
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST REWARDS FOR LOYALTY ACCOUNT
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{
+    Params: { loyaltyAccountId: string };
+  }>(
+    "/loyalty-accounts/:loyaltyAccountId/rewards",
+    async (request, reply) => {
+      const loyaltyAccount =
+        await api.prisma.loyaltyAccount.findUnique({
+          where: {
+            id: request.params.loyaltyAccountId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+      if (!loyaltyAccount) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACCOUNT_NOT_FOUND",
+          message: "Loyalty account was not found",
+        });
+      }
+
+      return api.prisma.reward.findMany({
+        where: {
+          loyaltyAccountId: request.params.loyaltyAccountId,
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * UPDATE REWARD
+   * --------------------------------------------------------------------------
+   */
+
+  api.patch<{ Params: { rewardId: string } }>(
+    "/rewards/:rewardId",
+    async (request, reply) => {
+      const body = updateRewardSchema.parse(request.body ?? {});
+
+      const existingReward = await api.prisma.reward.findUnique({
+        where: {
+          id: request.params.rewardId,
+        },
+      });
+
+      if (!existingReward) {
+        return reply.code(404).send({
+          error: "REWARD_NOT_FOUND",
+          message: "Reward was not found",
+        });
+      }
+
+      const reward = await api.prisma.reward.update({
+        where: {
+          id: request.params.rewardId,
+        },
+        data: {
+          ...(body.status !== undefined && { status: body.status }),
+          ...(body.redeemedAt !== undefined && { redeemedAt: body.redeemedAt }),
+          ...(body.description !== undefined && { description: body.description }),
+          ...(body.value !== undefined && { value: body.value }),
+          ...(body.expiresAt !== undefined && { expiresAt: body.expiresAt }),
+          ...(body.pointsRequired !== undefined && { pointsRequired: body.pointsRequired }),
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return reward;
+    }
+  );
+}

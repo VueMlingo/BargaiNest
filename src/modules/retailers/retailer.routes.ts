@@ -1,0 +1,237 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { RetailerStatus } from "@prisma/client";
+
+import { requireAuth } from "../auth/auth.middleware.js";
+
+const createRetailerSchema = z.object({
+  name: z.string().trim().min(1),
+  code: z.string().trim().min(1),
+  status: z.nativeEnum(RetailerStatus).optional(),
+});
+
+const updateRetailerSchema = z.object({
+  name: z.string().trim().min(1).optional(),
+  code: z.string().trim().min(1).optional(),
+  status: z.nativeEnum(RetailerStatus).optional(),
+});
+
+const createBranchSchema = z.object({
+  name: z.string().trim().min(1),
+  address: z.string().trim().optional(),
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  externalStoreCode: z.string().trim().min(1).optional(),
+  status: z.nativeEnum(RetailerStatus).optional(),
+});
+
+export async function registerRetailerRoutes(
+  api: FastifyInstance
+): Promise<void> {
+  /*
+   * ==========================================================================
+   * BN-011: this entire module had no authentication at all -- every route
+   * below, including the ones that create and modify retailers and branches,
+   * was reachable by anyone on the internet with no session, no credential,
+   * nothing. Matches the exact same gap already identified and fixed in
+   * reward.routes.ts and loyalty-activity.routes.ts, just never extended to
+   * this file (and its three siblings: loyalty-program, product, and
+   * price-observation routes -- same fix applied to all four).
+   *
+   * Retailer/branch data itself isn't user-owned (every authenticated user
+   * sees the same catalogue), so unlike rewards this doesn't need per-user
+   * query scoping -- requireAuth alone closes the actual gap: anonymous
+   * internet access, including to the write operations.
+   * ==========================================================================
+   */
+  await api.register(async (scoped) => {
+    scoped.addHook("preHandler", requireAuth);
+
+  /*
+   * --------------------------------------------------------------------------
+   * CREATE RETAILER
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.post("/retailers", async (request, reply) => {
+    const body = createRetailerSchema.parse(request.body ?? {});
+
+    const retailer = await api.prisma.retailer.create({
+      data: {
+        name: body.name,
+        code: body.code,
+        status: body.status ?? RetailerStatus.ACTIVE,
+      },
+      include: {
+        branches: true,
+        loyaltyPrograms: true,
+      },
+    });
+
+    return reply.code(201).send(retailer);
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST RETAILERS
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.get("/retailers", async () => {
+    return api.prisma.retailer.findMany({
+      orderBy: {
+        name: "asc",
+      },
+      include: {
+        branches: true,
+        loyaltyPrograms: true,
+      },
+    });
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * GET RETAILER
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.get<{ Params: { retailerId: string } }>(
+    "/retailers/:retailerId",
+    async (request, reply) => {
+      const retailer = await api.prisma.retailer.findUnique({
+        where: {
+          id: request.params.retailerId,
+        },
+        include: {
+          branches: true,
+          loyaltyPrograms: true,
+        },
+      });
+
+      if (!retailer) {
+        return reply.code(404).send({
+          error: "RETAILER_NOT_FOUND",
+          message: "Retailer was not found",
+        });
+      }
+
+      return retailer;
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * UPDATE RETAILER
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.patch<{ Params: { retailerId: string } }>(
+    "/retailers/:retailerId",
+    async (request, reply) => {
+      const body = updateRetailerSchema.parse(request.body ?? {});
+
+      const existing = await api.prisma.retailer.findUnique({
+        where: {
+          id: request.params.retailerId,
+        },
+      });
+
+      if (!existing) {
+        return reply.code(404).send({
+          error: "RETAILER_NOT_FOUND",
+          message: "Retailer was not found",
+        });
+      }
+
+      const retailer = await api.prisma.retailer.update({
+        where: {
+          id: request.params.retailerId,
+        },
+        data: {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.code !== undefined ? { code: body.code } : {}),
+        ...(body.status !== undefined ? { status: body.status } : {}),
+      },
+      });
+
+      return retailer;
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * CREATE RETAILER BRANCH
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.post<{ Params: { retailerId: string } }>(
+    "/retailers/:retailerId/branches",
+    async (request, reply) => {
+      const body = createBranchSchema.parse(request.body ?? {});
+
+      const retailer = await api.prisma.retailer.findUnique({
+        where: {
+          id: request.params.retailerId,
+        },
+      });
+
+      if (!retailer) {
+        return reply.code(404).send({
+          error: "RETAILER_NOT_FOUND",
+          message: "Retailer was not found",
+        });
+      }
+
+      const branch = await api.prisma.retailerBranch.create({
+        data: {
+          retailerId: request.params.retailerId,
+          name: body.name,
+          address: body.address ?? null,
+          latitude: body.latitude ?? null,
+          longitude: body.longitude ?? null,
+                    externalStoreCode: body.externalStoreCode ?? null,
+          status: body.status ?? RetailerStatus.ACTIVE,
+        },
+      });
+
+      return reply.code(201).send(branch);
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST RETAILER BRANCHES
+   * --------------------------------------------------------------------------
+   */
+
+  scoped.get<{ Params: { retailerId: string } }>(
+    "/retailers/:retailerId/branches",
+    async (request, reply) => {
+      const retailer = await api.prisma.retailer.findUnique({
+        where: {
+          id: request.params.retailerId,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!retailer) {
+        return reply.code(404).send({
+          error: "RETAILER_NOT_FOUND",
+          message: "Retailer was not found",
+        });
+      }
+
+      return api.prisma.retailerBranch.findMany({
+        where: {
+          retailerId: request.params.retailerId,
+        },
+        orderBy: {
+          name: "asc",
+        },
+      });
+    }
+  );
+  });
+}

@@ -1,0 +1,367 @@
+import type { FastifyInstance } from "fastify";
+
+import type {
+  ShoppingListValueItem,
+  ShoppingListValueResult,
+} from "./shopping-list-value.types.js";
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function calculateConfidence(observedAt: Date): number {
+  const ageInDays =
+    (Date.now() - observedAt.getTime()) /
+    (1000 * 60 * 60 * 24);
+
+  if (ageInDays <= 1) {
+    return 1;
+  }
+
+  if (ageInDays <= 3) {
+    return 0.9;
+  }
+
+  if (ageInDays <= 7) {
+    return 0.75;
+  }
+
+  if (ageInDays <= 14) {
+    return 0.5;
+  }
+
+  return 0.25;
+}
+
+function getTargetStatus(
+  bestUnitPrice: number | null,
+  targetPrice: number | null
+): ShoppingListValueItem["targetStatus"] {
+  if (bestUnitPrice === null) {
+    return "NO_PRICE";
+  }
+
+  if (targetPrice === null) {
+    return "NO_TARGET";
+  }
+
+  if (bestUnitPrice < targetPrice) {
+    return "BELOW_TARGET";
+  }
+
+  if (bestUnitPrice === targetPrice) {
+    return "AT_TARGET";
+  }
+
+  return "ABOVE_TARGET";
+}
+
+export async function evaluateShoppingListValue(
+  api: FastifyInstance,
+  userId: string,
+  shoppingListId: string
+): Promise<ShoppingListValueResult | null> {
+  const shoppingList =
+    await api.prisma.shoppingList.findFirst({
+      where: {
+        id: shoppingListId,
+        userId,
+      },
+      include: {
+        items: {
+          where: {
+            status: "ACTIVE",
+          },
+          orderBy: {
+            createdAt: "asc",
+          },
+          include: {
+            product: {
+              include: {
+                priceObservations: {
+                  orderBy: {
+                    observedAt: "desc",
+                  },
+                  include: {
+                    retailer: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+  if (!shoppingList) {
+    return null;
+  }
+
+  const items: ShoppingListValueItem[] = [];
+
+  let bestKnownBasketValue = 0;
+  let potentialSavings = 0;
+
+  let itemsWithoutProduct = 0;
+  let itemsWithoutPrice = 0;
+  let comparableItems = 0;
+
+  let currency: string | null = null;
+
+  for (const item of shoppingList.items) {
+    const quantity = Number(item.quantity);
+    const targetPrice =
+      item.targetPrice !== null
+        ? Number(item.targetPrice)
+        : null;
+
+    if (!item.product) {
+      itemsWithoutProduct += 1;
+
+      items.push({
+        itemId: item.id,
+        description: item.description,
+        quantity,
+        targetPrice,
+
+        productId: null,
+        productName: null,
+
+        comparable: false,
+
+        bestPrice: null,
+        bestRetailerId: null,
+        bestRetailerName: null,
+        bestObservedAt: null,
+        bestCurrency: null,
+
+        lineValue: null,
+        potentialSaving: null,
+
+        targetStatus: "NO_PRICE",
+        confidence: null,
+      });
+
+      continue;
+    }
+
+    const latestByRetailer = new Map<
+      string,
+      (typeof item.product.priceObservations)[number]
+    >();
+
+    for (const observation of item.product.priceObservations) {
+      if (!latestByRetailer.has(observation.retailerId)) {
+        latestByRetailer.set(
+          observation.retailerId,
+          observation
+        );
+      }
+    }
+
+    const observations = Array.from(
+      latestByRetailer.values()
+    ).filter(
+      (observation) =>
+        Number.isFinite(Number(observation.price)) &&
+        Number(observation.price) >= 0
+    );
+
+    if (!observations.length) {
+      itemsWithoutPrice += 1;
+
+      items.push({
+        itemId: item.id,
+        description: item.description,
+        quantity,
+        targetPrice,
+
+        productId: item.product.id,
+        productName: item.product.name,
+
+        comparable: false,
+
+        bestPrice: null,
+        bestRetailerId: null,
+        bestRetailerName: null,
+        bestObservedAt: null,
+        bestCurrency: null,
+
+        lineValue: null,
+        potentialSaving: null,
+
+        targetStatus: "NO_PRICE",
+        confidence: null,
+      });
+
+      continue;
+    }
+
+    /*
+     * Only compare observations in the same currency.
+     *
+     * The first valid observation establishes the currency for
+     * this product comparison.
+     */
+    const firstObservation = observations[0];
+
+    if (!firstObservation) {
+      itemsWithoutPrice += 1;
+
+      items.push({
+        itemId: item.id,
+        description: item.description,
+        quantity,
+        targetPrice,
+        productId: item.product.id,
+        productName: item.product.name,
+        comparable: false,
+        bestPrice: null,
+        bestRetailerId: null,
+        bestRetailerName: null,
+        bestObservedAt: null,
+        bestCurrency: null,
+        lineValue: null,
+        potentialSaving: null,
+        targetStatus: "NO_PRICE",
+        confidence: null,
+      });
+
+      continue;
+    }
+
+    const comparisonCurrency =
+      firstObservation.currency;
+
+    const comparableObservations =
+      observations.filter(
+        (observation) =>
+          observation.currency === comparisonCurrency
+      );
+
+    if (!comparableObservations.length) {
+      itemsWithoutPrice += 1;
+
+      items.push({
+        itemId: item.id,
+        description: item.description,
+        quantity,
+        targetPrice,
+
+        productId: item.product.id,
+        productName: item.product.name,
+
+        comparable: false,
+
+        bestPrice: null,
+        bestRetailerId: null,
+        bestRetailerName: null,
+        bestObservedAt: null,
+        bestCurrency: null,
+
+        lineValue: null,
+        potentialSaving: null,
+
+        targetStatus: "NO_PRICE",
+        confidence: null,
+      });
+
+      continue;
+    }
+
+    const bestObservation =
+      comparableObservations.reduce(
+        (best, current) =>
+          Number(current.price) < Number(best.price)
+            ? current
+            : best
+      );
+
+    const bestUnitPrice = Number(
+      bestObservation.price
+    );
+
+    const lineValue = roundMoney(
+      bestUnitPrice * quantity
+    );
+
+    /*
+     * Potential saving is based on the item's target price
+     * when one has been supplied.
+     *
+     * We deliberately do not invent a "current basket"
+     * baseline because ShoppingListItem does not store one.
+     */
+    const itemSaving =
+      targetPrice !== null &&
+      targetPrice > bestUnitPrice
+        ? roundMoney(
+            (targetPrice - bestUnitPrice) * quantity
+          )
+        : 0;
+
+    bestKnownBasketValue += lineValue;
+    potentialSavings += itemSaving;
+    comparableItems += 1;
+
+    currency ??= comparisonCurrency;
+
+    items.push({
+      itemId: item.id,
+      description: item.description,
+      quantity,
+      targetPrice,
+
+      productId: item.product.id,
+      productName: item.product.name,
+
+      comparable: true,
+
+      bestPrice: bestUnitPrice,
+      bestRetailerId: bestObservation.retailerId,
+      bestRetailerName:
+        bestObservation.retailer.name,
+
+      bestObservedAt:
+        bestObservation.observedAt,
+
+      bestCurrency:
+        bestObservation.currency,
+
+      lineValue,
+      potentialSaving:
+        itemSaving > 0 ? itemSaving : 0,
+
+      targetStatus: getTargetStatus(
+        bestUnitPrice,
+        targetPrice
+      ),
+
+      confidence: calculateConfidence(
+        bestObservation.observedAt
+      ),
+    });
+  }
+
+  return {
+    shoppingListId: shoppingList.id,
+    shoppingListName: shoppingList.name,
+
+    items,
+
+    summary: {
+      itemsAnalysed: shoppingList.items.length,
+      itemsWithoutProduct,
+      itemsWithoutPrice,
+      comparableItems,
+
+      bestKnownBasketValue:
+        roundMoney(bestKnownBasketValue),
+
+      potentialSavings:
+        roundMoney(potentialSavings),
+
+      currency,
+    },
+  };
+}

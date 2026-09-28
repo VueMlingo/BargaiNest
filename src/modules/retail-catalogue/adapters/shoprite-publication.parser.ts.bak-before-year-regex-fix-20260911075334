@@ -1,0 +1,234 @@
+import type { RawCatalogueItem } from "../retail-catalogue.types.js";
+
+export interface ShopritePublicationParseResult {
+  title: string | null;
+  validFrom: Date | null;
+  validUntil: Date | null;
+  region: string | null;
+  countryCode: string;
+  items: RawCatalogueItem[];
+}
+
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+function cleanText(value: string): string {
+  return decodeHtml(value)
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseDate(value: string | undefined): Date | null {
+  if (!value) return null;
+
+  const match = value.match(
+    /(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{4})/i
+  );
+
+  if (!match) return null;
+
+  const day = match[1];
+  const month = match[2];
+  const year = match[3];
+
+  if (!day || !month || !year) return null;
+
+  const monthIndex = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  ].indexOf(month.toLowerCase());
+
+  if (monthIndex < 0) return null;
+
+  return new Date(
+    Date.UTC(
+      Number(year),
+      monthIndex,
+      Number(day),
+      23,
+      59,
+      59,
+      999
+    )
+  );
+}
+
+function parseValidity(text: string): {
+  validFrom: Date | null;
+  validUntil: Date | null;
+} {
+  const range = text.match(
+    /valid\s+from\s+(?:\w+\s+)?(\d{1,2}\s+\w+)\s+until\s+(?:\w+\s+)?(\d{1,2}\s+\w+\s+(\d{4}))/i
+  );
+
+  if (range) {
+    const firstDate = range[1];
+    const secondDate = range[2];
+    const year = range[3];
+
+    if (firstDate && secondDate && year) {
+      return {
+        validFrom: parseDate(firstDate + " " + year),
+        validUntil: parseDate(secondDate),
+      };
+    }
+  }
+
+  return {
+    validFrom: null,
+    validUntil: null,
+  };
+}
+
+function extractRegion(text: string): string | null {
+  const match = text.match(
+    /prices apply to shoprite stores(?: in| )([^.;]+?)(?:\s+only|, excluding|\.| while stocks)/i
+  );
+
+  const region = match?.[1]?.trim();
+
+  return region || null;
+}
+
+function parsePriceToken(value: string | undefined): number | null {
+  if (!value) return null;
+
+  const normalized = value
+    .replace(/^R/i, "")
+    .replace(/\s/g, "");
+
+  if (/^\d+\.\d{1,2}$/.test(normalized)) {
+    const price = Number(normalized);
+    return Number.isFinite(price) ? price : null;
+  }
+
+  /*
+   * Shoprite publication HTML can flatten R19.99 to 1999.
+   * We only accept four-digit values here because the surrounding
+   * parser requires a product-name context.
+   */
+  if (/^\d{4}$/.test(normalized)) {
+    const price = Number(normalized) / 100;
+
+    if (price >= 1 && price <= 9999) {
+      return price;
+    }
+  }
+
+  return null;
+}
+
+function extractItems(
+  text: string,
+  sourceReference: string,
+  validFrom: Date | null,
+  validUntil: Date | null
+): RawCatalogueItem[] {
+  const items: RawCatalogueItem[] = [];
+
+  const pattern =
+    /(?:^|\s)(?:[A-Z0-9]{6,}\/[A-Z])?\s*(R?\d{1,4}(?:\.\d{1,2})?)\s+([A-Z][^.!?]{5,160}?)(?=\s+(?:R?\d{1,4}(?:\.\d{1,2})?)\s+|$)/g;
+
+  for (const match of text.matchAll(pattern)) {
+    const priceToken = match[1];
+    const productName = match[2];
+
+    if (!priceToken || !productName) continue;
+
+    /*
+     * Publication dates can appear in the same flattened body text as
+     * catalogue offers. Never interpret a year as a flattened price.
+     */
+    if (/^(19|20)\\d{2}$/.test(priceToken)) {
+      continue;
+    }
+
+    const price = parsePriceToken(priceToken);
+    const name = productName.replace(/\s+/g, " ").trim();
+
+    if (price === null || !name) continue;
+
+    if (
+      /^(save|prices|offers|valid|prices apply|customer care|vat included)/i.test(
+        name
+      )
+    ) {
+      continue;
+    }
+
+    items.push({
+      name,
+      currency: "ZAR",
+      price,
+      isPromotion: true,
+      sourceReference,
+      extractionMethod: "WEB_PARSER",
+      extractionConfidence: 0.8,
+      ...(validFrom !== null && { validFrom }),
+      ...(validUntil !== null && { validUntil }),
+      rawData: {
+        parser: "SHOPRITE_PUBLICATION_V1",
+        matchedText: match[0].trim(),
+      },
+    });
+  }
+
+  return items;
+}
+
+export function parseShopritePublication(
+  html: string,
+  sourceReference: string
+): ShopritePublicationParseResult {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+
+  const textContainerMatch = html.match(
+    /<div[^>]+id=["']text-container["'][^>]*>([\s\S]*?)<\/div>/i
+  );
+
+  const rawText = textContainerMatch?.[1] ?? html;
+  const text = cleanText(rawText);
+
+  const title = titleMatch?.[1]
+    ? cleanText(titleMatch[1])
+    : null;
+
+  const validity = parseValidity(text);
+  const region = extractRegion(text);
+
+  const items = extractItems(
+    text,
+    sourceReference,
+    validity.validFrom,
+    validity.validUntil
+  );
+
+  return {
+    title,
+    validFrom: validity.validFrom,
+    validUntil: validity.validUntil,
+    region,
+    countryCode: "ZA",
+    items,
+  };
+}

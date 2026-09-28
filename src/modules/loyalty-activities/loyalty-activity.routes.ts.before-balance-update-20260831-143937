@@ -1,0 +1,169 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { LoyaltyActivityType } from "@prisma/client";
+
+const createActivitySchema = z.object({
+  type: z.nativeEnum(LoyaltyActivityType),
+  reference: z.string().trim().min(1).optional(),
+  description: z.string().trim().min(1).optional(),
+  occurredAt: z.coerce.date().optional(),
+  points: z.coerce.number().optional(),
+});
+
+export async function registerLoyaltyActivityRoutes(
+  api: FastifyInstance
+): Promise<void> {
+  /*
+   * --------------------------------------------------------------------------
+   * LIST ALL LOYALTY ACTIVITIES
+   * --------------------------------------------------------------------------
+   */
+
+  api.get("/loyalty-activities", async () => {
+    return api.prisma.loyaltyActivity.findMany({
+      orderBy: {
+        occurredAt: "desc",
+      },
+      include: {
+        loyaltyAccount: {
+          include: {
+            loyaltyProgram: {
+              include: {
+                retailer: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  /*
+   * --------------------------------------------------------------------------
+   * GET LOYALTY ACTIVITY
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{ Params: { activityId: string } }>(
+    "/loyalty-activities/:activityId",
+    async (request, reply) => {
+      const activity = await api.prisma.loyaltyActivity.findUnique({
+        where: {
+          id: request.params.activityId,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      if (!activity) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACTIVITY_NOT_FOUND",
+          message: "Loyalty activity was not found",
+        });
+      }
+
+      return activity;
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * CREATE LOYALTY ACTIVITY
+   * --------------------------------------------------------------------------
+   */
+
+  api.post<{
+    Params: { loyaltyAccountId: string };
+  }>(
+    "/loyalty-accounts/:loyaltyAccountId/activities",
+    async (request, reply) => {
+      const body = createActivitySchema.parse(request.body ?? {});
+
+      const loyaltyAccount =
+        await api.prisma.loyaltyAccount.findUnique({
+          where: {
+            id: request.params.loyaltyAccountId,
+          },
+        });
+
+      if (!loyaltyAccount) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACCOUNT_NOT_FOUND",
+          message: "Loyalty account was not found",
+        });
+      }
+
+      const activity = await api.prisma.loyaltyActivity.create({
+        data: {
+          loyaltyAccountId: request.params.loyaltyAccountId,
+          type: body.type,
+          ...(body.reference !== undefined && { reference: body.reference }),
+          ...(body.description !== undefined && { description: body.description }),
+          ...(body.occurredAt !== undefined && { occurredAt: body.occurredAt }),
+          points: body.points ?? 0,
+        },
+        include: {
+          loyaltyAccount: {
+            include: {
+              loyaltyProgram: {
+                include: {
+                  retailer: true,
+                },
+              },
+            },
+          },
+        },
+      });
+
+      return reply.code(201).send(activity);
+    }
+  );
+
+  /*
+   * --------------------------------------------------------------------------
+   * LIST ACTIVITIES FOR LOYALTY ACCOUNT
+   * --------------------------------------------------------------------------
+   */
+
+  api.get<{
+    Params: { loyaltyAccountId: string };
+  }>(
+    "/loyalty-accounts/:loyaltyAccountId/activities",
+    async (request, reply) => {
+      const loyaltyAccount =
+        await api.prisma.loyaltyAccount.findUnique({
+          where: {
+            id: request.params.loyaltyAccountId,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+      if (!loyaltyAccount) {
+        return reply.code(404).send({
+          error: "LOYALTY_ACCOUNT_NOT_FOUND",
+          message: "Loyalty account was not found",
+        });
+      }
+
+      return api.prisma.loyaltyActivity.findMany({
+        where: {
+          loyaltyAccountId: request.params.loyaltyAccountId,
+        },
+        orderBy: {
+          occurredAt: "desc",
+        },
+      });
+    }
+  );
+}

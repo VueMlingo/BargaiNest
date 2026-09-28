@@ -1,0 +1,138 @@
+import { describe, expect, it } from "vitest";
+
+import { detectBetterPrice } from "../../src/modules/intelligence-engine/intelligence-engine.decision.js";
+import type {
+  PriceComparisonInput,
+  PriceCandidate,
+} from "../../src/modules/intelligence-engine/intelligence-engine.types.js";
+
+function makeCandidate(
+  retailerId: string,
+  price: number,
+  retailerName?: string
+): PriceCandidate {
+  return {
+    retailerId,
+    ...(retailerName !== undefined ? { retailerName } : {}),
+    price,
+    currency: "ZAR",
+    observedAt: new Date("2026-08-21T10:00:00Z"),
+  };
+}
+
+function makeInput(
+  alternatives: PriceCandidate[],
+  currentPrice = 100
+): PriceComparisonInput {
+  return {
+    productId: "product-1",
+    productName: "Test Product",
+    currentRetailerId: "retailer-current",
+    currentRetailerName: "Current Retailer",
+    currentPrice,
+    currentObservedAt: new Date("2026-08-21T10:00:00Z"),
+    currency: "ZAR",
+    alternatives,
+  };
+}
+
+describe("detectBetterPrice", () => {
+  it("detects a lower price at another retailer", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", 80, "Cheaper Retailer"),
+      ])
+    );
+
+    expect(result.detected).toBe(true);
+    expect(result.type).toBe("BETTER_PRICE");
+    expect(result.alternativePrice).toBe(80);
+    expect(result.estimatedSaving).toBe(20);
+    expect(result.alternativeRetailerId).toBe("retailer-2");
+    expect(result.alternativeRetailerName).toBe("Cheaper Retailer");
+  });
+
+  it("returns no opportunity when there are no alternatives", () => {
+    const result = detectBetterPrice(makeInput([]));
+
+    expect(result.detected).toBe(false);
+  });
+
+  it("returns no opportunity when no alternative is cheaper", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", 100, "Same Price Retailer"),
+        makeCandidate("retailer-3", 120, "More Expensive Retailer"),
+      ])
+    );
+
+    expect(result.detected).toBe(false);
+  });
+
+  it("ignores an alternative belonging to the current retailer", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-current", 50, "Current Retailer"),
+        makeCandidate("retailer-2", 90, "Other Retailer"),
+      ])
+    );
+
+    expect(result.detected).toBe(true);
+    expect(result.alternativeRetailerId).toBe("retailer-2");
+    expect(result.alternativePrice).toBe(90);
+  });
+
+  it("selects the cheapest valid alternative", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", 95, "Retailer A"),
+        makeCandidate("retailer-3", 70, "Retailer B"),
+        makeCandidate("retailer-4", 85, "Retailer C"),
+      ])
+    );
+
+    expect(result.detected).toBe(true);
+    expect(result.alternativePrice).toBe(70);
+    expect(result.alternativeRetailerId).toBe("retailer-3");
+    expect(result.alternativeRetailerName).toBe("Retailer B");
+    expect(result.estimatedSaving).toBe(30);
+  });
+
+  it("calculates the savings score correctly", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", 90, "Cheaper Retailer"),
+      ])
+    );
+
+    expect(result.estimatedSaving).toBe(10);
+    expect(result.score).toBe(56);
+    expect(result.confidence).toBe(0.75);
+  });
+
+  it("rejects invalid negative prices", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", -10, "Invalid Retailer"),
+        makeCandidate("retailer-3", 95, "Valid Retailer"),
+      ])
+    );
+
+    expect(result.detected).toBe(true);
+    expect(result.alternativePrice).toBe(95);
+    expect(result.alternativeRetailerId).toBe("retailer-3");
+  });
+
+  it("rejects non-finite prices", () => {
+    const result = detectBetterPrice(
+      makeInput([
+        makeCandidate("retailer-2", Number.NaN, "Invalid Retailer"),
+        makeCandidate("retailer-3", 90, "Valid Retailer"),
+      ])
+    );
+
+    expect(result.detected).toBe(true);
+    expect(result.alternativePrice).toBe(90);
+    expect(result.alternativeRetailerId).toBe("retailer-3");
+  });
+});

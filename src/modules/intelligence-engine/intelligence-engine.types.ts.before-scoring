@@ -1,0 +1,38 @@
+export type IntelligenceDecisionType =
+  | "BETTER_PRICE"
+  | "PRICE_DROP"
+  | "RETAILER_COMPARISON";
+
+export interface PriceCandidate {
+  retailerId: string;
+  retailerName?: string;
+  price: number;
+  currency: string;
+  observedAt: Date;
+}
+
+export interface PriceComparisonInput {
+  productId: string;
+  productName: string;
+  currentRetailerId: string;
+  currentRetailerName?: string;
+  currentPrice: number;
+  currency: string;
+  alternatives: PriceCandidate[];
+}
+
+export interface IntelligenceDecision {
+  detected: boolean;
+  type?: IntelligenceDecisionType;
+  title?: string;
+  description?: string;
+  currentPrice?: number;
+  alternativePrice?: number;
+  estimatedSaving?: number;
+  currency?: string;
+  alternativeRetailerId?: string;
+  alternativeRetailerName?: string;
+  score?: number;
+  confidence?: number;
+  reason?: string;
+}

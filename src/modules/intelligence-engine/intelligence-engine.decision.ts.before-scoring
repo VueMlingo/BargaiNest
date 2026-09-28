@@ -1,0 +1,96 @@
+import {
+  IntelligenceDecision,
+  PriceComparisonInput,
+} from "./intelligence-engine.types.js";
+
+export function detectBetterPrice(
+  input: PriceComparisonInput
+): IntelligenceDecision {
+  if (!input.alternatives.length) {
+    return {
+      detected: false,
+    };
+  }
+
+  const validAlternatives = input.alternatives.filter(
+    (alternative) =>
+      Number.isFinite(alternative.price) &&
+      alternative.price >= 0 &&
+      alternative.retailerId !== input.currentRetailerId
+  );
+
+  if (!validAlternatives.length) {
+    return {
+      detected: false,
+    };
+  }
+
+  const bestAlternative = validAlternatives.reduce((best, current) =>
+    current.price < best.price ? current : best
+  );
+
+  const saving = input.currentPrice - bestAlternative.price;
+
+  if (saving <= 0) {
+    return {
+      detected: false,
+    };
+  }
+
+  const savingPercentage =
+    input.currentPrice > 0
+      ? (saving / input.currentPrice) * 100
+      : 0;
+
+  const score = Math.min(100, Math.max(0, savingPercentage / 2));
+
+  return {
+    detected: true,
+    type: "BETTER_PRICE",
+
+    title: `Save ${formatCurrency(
+      saving,
+      input.currency
+    )} on ${input.productName}`,
+
+    description: `${input.productName} is available for ${
+      bestAlternative.price
+    } ${input.currency} at ${
+      bestAlternative.retailerName ?? "another retailer"
+    }, compared with ${
+      input.currentPrice
+    } ${input.currency} at ${
+      input.currentRetailerName ?? "the current retailer"
+    }.`,
+
+    currentPrice: input.currentPrice,
+    alternativePrice: bestAlternative.price,
+    estimatedSaving: roundMoney(saving),
+    currency: input.currency,
+
+    alternativeRetailerId: bestAlternative.retailerId,
+    alternativeRetailerName: bestAlternative.retailerName ?? "another retailer",
+
+    score: roundScore(score),
+    confidence: 1,
+
+    reason: `A lower observed price exists at ${
+      bestAlternative.retailerName ?? "another retailer"
+    }.`,
+  };
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function roundScore(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function formatCurrency(
+  value: number,
+  currency: string
+): string {
+  return `${roundMoney(value).toFixed(2)} ${currency}`;
+}

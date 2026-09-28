@@ -1,0 +1,35 @@
+import fp from "fastify-plugin";
+import { PrismaClient } from "@prisma/client";
+import { PrismaMariaDb } from "@prisma/adapter-mariadb";
+import { env } from "../config/env.js";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    prisma: PrismaClient;
+  }
+}
+
+const prismaPlugin = fp(async (fastify) => {
+  const adapter = new PrismaMariaDb({
+    host: env.DB_HOST,
+    port: env.DB_PORT,
+    user: env.DB_USER,
+    password: env.DB_PASSWORD,
+    database: env.DB_NAME,
+    connectionLimit: 5
+  });
+
+  const prisma = new PrismaClient({
+    adapter
+  });
+
+  await prisma.$connect();
+
+  fastify.decorate("prisma", prisma);
+
+  fastify.addHook("onClose", async () => {
+    await prisma.$disconnect();
+  });
+});
+
+export default prismaPlugin;

@@ -1,0 +1,758 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import { LoyaltyAccountStatus, LoyaltyCardStatus, Prisma } from "@prisma/client";
+
+import { requireAuth } from "./auth.middleware.js";
+import { RetailerConnectionService } from "../../integrations/loyalty/connection/retailer-connection.service.js";
+import { LoyaltySnapshotSyncService } from "../../integrations/loyalty/sync/loyalty-snapshot-sync.service.js";
+import { LoyaltyConsumerReadService } from "../../integrations/loyalty/read/loyalty-consumer-read.service.js";
+
+const createLoyaltyAccountSchema = z.object({
+  loyaltyProgramId: z.string().uuid(),
+  accountNumber: z.string().trim().min(1).max(191).optional()
+});
+
+const createLoyaltyCardSchema = z.object({
+  cardNumber: z.string().trim().min(1).max(191),
+  status: z.nativeEnum(LoyaltyCardStatus).optional(),
+  issuedAt: z.coerce.date().optional(),
+  expiresAt: z.coerce.date().optional()
+});
+
+const updateLoyaltyCardSchema = z
+  .object({
+    cardNumber: z.string().trim().min(1).max(191).optional(),
+    status: z.nativeEnum(LoyaltyCardStatus).optional(),
+    issuedAt: z.coerce.date().nullable().optional(),
+    expiresAt: z.coerce.date().nullable().optional()
+  })
+  .refine(
+    (data) =>
+      data.cardNumber !== undefined ||
+      data.status !== undefined ||
+      data.issuedAt !== undefined ||
+      data.expiresAt !== undefined,
+    {
+      message: "At least one field must be provided for update"
+    }
+  );
+
+const createRetailerConnectionSchema = z.object({
+  integrationId: z.string().uuid(),
+  externalAccountId: z.string().trim().min(1).max(191)
+});
+
+function getAuthenticatedUserId(request: {
+  currentUserId?: string;
+}): string {
+  if (!request.currentUserId) {
+    throw new Error("AUTHENTICATED_USER_ID_MISSING");
+  }
+
+  return request.currentUserId;
+}
+
+/*
+ * Shared include shape for a loyalty account, seen from the consumer's own
+ * wallet: programme/retailer info, cards, the points activity ledger, and
+ * any rewards attached to the account.
+ */
+const loyaltyAccountInclude = {
+  loyaltyProgram: {
+    include: {
+      retailer: true
+    }
+  },
+  cards: {
+    orderBy: {
+      createdAt: "asc" as const
+    }
+  },
+  activities: {
+    orderBy: {
+      occurredAt: "desc" as const
+    }
+  },
+  rewards: {
+    orderBy: {
+      createdAt: "desc" as const
+    }
+  }
+};
+
+async function getOwnedLoyaltyAccount(
+  api: FastifyInstance,
+  userId: string,
+  loyaltyAccountId: string
+) {
+  return api.prisma.loyaltyAccount.findFirst({
+    where: {
+      id: loyaltyAccountId,
+      userId
+    },
+    include: loyaltyAccountInclude
+  });
+}
+
+async function getOwnedLoyaltyCard(
+  api: FastifyInstance,
+  userId: string,
+  cardId: string
+) {
+  return api.prisma.loyaltyCard.findFirst({
+    where: {
+      id: cardId,
+      loyaltyAccount: {
+        userId
+      }
+    },
+    include: {
+      loyaltyAccount: {
+        include: {
+          loyaltyProgram: {
+            include: {
+              retailer: true
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+export async function registerConsumerRoutes(
+  api: FastifyInstance
+): Promise<void> {
+  api.register(
+    async (consumer) => {
+      consumer.addHook("preHandler", requireAuth);
+
+      /*
+       * ------------------------------------------------------------------------
+       * GET CURRENT USER'S LOYALTY ACCOUNTS
+       * ------------------------------------------------------------------------
+       */
+
+      consumer.get("/loyalty-accounts", async (request) => {
+        const userId = getAuthenticatedUserId(request);
+
+        return consumer.prisma.loyaltyAccount.findMany({
+          where: {
+            userId
+          },
+          orderBy: {
+            createdAt: "desc"
+          },
+          include: loyaltyAccountInclude
+        });
+      });
+
+      /*
+       * ------------------------------------------------------------------------
+       * CREATE CURRENT USER'S LOYALTY ACCOUNT
+       * ------------------------------------------------------------------------
+       *
+       * The user supplies a loyalty programme from the BargaiNest catalogue.
+       * The userId is NEVER supplied by the client.
+       */
+
+      consumer.post("/loyalty-accounts", async (request, reply) => {
+        const userId = getAuthenticatedUserId(request);
+        const body = createLoyaltyAccountSchema.parse(request.body ?? {});
+
+        const programme = await consumer.prisma.loyaltyProgram.findUnique({
+          where: {
+            id: body.loyaltyProgramId
+          },
+          include: {
+            retailer: true
+          }
+        });
+
+        if (!programme) {
+          return reply.code(404).send({
+            error: "LOYALTY_PROGRAM_NOT_FOUND",
+            message: "The selected loyalty programme was not found."
+          });
+        }
+
+        if (programme.status !== "ACTIVE") {
+          return reply.code(409).send({
+            error: "LOYALTY_PROGRAM_NOT_ACTIVE",
+            message: "The selected loyalty programme is not currently active."
+          });
+        }
+
+        try {
+          const account = await consumer.prisma.loyaltyAccount.create({
+            data: {
+              userId,
+              loyaltyProgramId: body.loyaltyProgramId,
+              ...(body.accountNumber !== undefined
+                ? { accountNumber: body.accountNumber }
+                : {}),
+              status: LoyaltyAccountStatus.ACTIVE
+            },
+            include: loyaltyAccountInclude
+          });
+
+          return reply.code(201).send(account);
+        } catch (error) {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002"
+          ) {
+            return reply.code(409).send({
+              error: "LOYALTY_ACCOUNT_ALREADY_EXISTS",
+              message:
+                "You already have a loyalty account for this programme."
+            });
+          }
+
+          throw error;
+        }
+      });
+
+      /*
+       * ------------------------------------------------------------------------
+       * GET CURRENT USER'S LOYALTY ACCOUNT
+       * ------------------------------------------------------------------------
+       */
+
+      consumer.get<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          return account;
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * GET CURRENT USER'S CARDS FOR A LOYALTY ACCOUNT
+       * ------------------------------------------------------------------------
+       */
+
+      consumer.get<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/cards",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          return account.cards;
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * ADD CARD TO CURRENT USER'S LOYALTY ACCOUNT
+       * ------------------------------------------------------------------------
+       *
+       * IMPORTANT:
+       * loyaltyAccountId comes from the URL, but ownership is verified against
+       * the authenticated user before the card can be created.
+       */
+
+      consumer.post<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/cards",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+          const body = createLoyaltyCardSchema.parse(request.body ?? {});
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          try {
+            const card = await consumer.prisma.loyaltyCard.create({
+              data: {
+                loyaltyAccountId: account.id,
+                cardNumber: body.cardNumber,
+                status: body.status ?? LoyaltyCardStatus.ACTIVE,
+                ...(body.issuedAt !== undefined
+                  ? { issuedAt: body.issuedAt }
+                  : {}),
+                ...(body.expiresAt !== undefined
+                  ? { expiresAt: body.expiresAt }
+                  : {})
+              },
+              include: {
+                loyaltyAccount: {
+                  include: {
+                    loyaltyProgram: {
+                      include: {
+                        retailer: true
+                      }
+                    }
+                  }
+                }
+              }
+            });
+
+            return reply.code(201).send(card);
+          } catch (error) {
+            if (
+              error instanceof Prisma.PrismaClientKnownRequestError &&
+              error.code === "P2002"
+            ) {
+              return reply.code(409).send({
+                error: "LOYALTY_CARD_ALREADY_EXISTS",
+                message: "A loyalty card with this card number already exists.",
+                field: "cardNumber"
+              });
+            }
+
+            throw error;
+          }
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * UPDATE CURRENT USER'S LOYALTY CARD
+       * ------------------------------------------------------------------------
+       */
+
+      consumer.patch<{
+        Params: {
+          cardId: string;
+        };
+      }>("/loyalty-cards/:cardId", async (request, reply) => {
+        const userId = getAuthenticatedUserId(request);
+        const cardId = request.params.cardId;
+
+        if (!z.string().uuid().safeParse(cardId).success) {
+          return reply.code(400).send({
+            error: "INVALID_LOYALTY_CARD_ID",
+            message: "The loyalty card ID must be a valid UUID."
+          });
+        }
+
+        const body = updateLoyaltyCardSchema.parse(request.body ?? {});
+
+        const existingCard = await getOwnedLoyaltyCard(
+          consumer,
+          userId,
+          cardId
+        );
+
+        if (!existingCard) {
+          return reply.code(404).send({
+            error: "LOYALTY_CARD_NOT_FOUND",
+            message: "Loyalty card was not found."
+          });
+        }
+
+        const updateData: Prisma.LoyaltyCardUpdateInput = {};
+
+        if (body.cardNumber !== undefined) {
+          updateData.cardNumber = body.cardNumber;
+        }
+
+        if (body.status !== undefined) {
+          updateData.status = body.status;
+        }
+
+        if (body.issuedAt !== undefined) {
+          updateData.issuedAt = body.issuedAt;
+        }
+
+        if (body.expiresAt !== undefined) {
+          updateData.expiresAt = body.expiresAt;
+        }
+
+        try {
+          const updatedCard = await consumer.prisma.loyaltyCard.update({
+            where: {
+              id: existingCard.id
+            },
+            data: updateData,
+            include: {
+              loyaltyAccount: {
+                include: {
+                  loyaltyProgram: {
+                    include: {
+                      retailer: true
+                    }
+                  }
+                }
+              }
+            }
+          });
+
+          return updatedCard;
+        } catch (error) {
+          if (
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002"
+          ) {
+            return reply.code(409).send({
+              error: "LOYALTY_CARD_ALREADY_EXISTS",
+              message: "A loyalty card with this card number already exists.",
+              field: "cardNumber"
+            });
+          }
+
+          throw error;
+        }
+      });
+
+      /*
+       * ------------------------------------------------------------------------
+       * CONNECT CURRENT USER'S LOYALTY ACCOUNT TO A RETAILER INTEGRATION
+       * ------------------------------------------------------------------------
+       *
+       * The browser supplies the integration and retailer-side account
+       * identifier. The authenticated user is always derived from the session.
+       *
+       * BargaiNest does NOT create or own the retailer's loyalty balance.
+       */
+
+      consumer.post<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/connection",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+          const body = createRetailerConnectionSchema.parse(
+            request.body ?? {}
+          );
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          try {
+            const service = new RetailerConnectionService(
+              consumer.prisma
+            );
+
+            const connection = await service.connect({
+              userId,
+              loyaltyAccountId: account.id,
+              integrationId: body.integrationId,
+              externalAccountId: body.externalAccountId
+            });
+
+            return reply.code(201).send(connection);
+          } catch (error) {
+            if (error instanceof Error) {
+              switch (error.message) {
+                case "LOYALTY_ACCOUNT_NOT_FOUND":
+                  return reply.code(404).send({
+                    error: "LOYALTY_ACCOUNT_NOT_FOUND",
+                    message: "Loyalty account was not found."
+                  });
+
+                case "LOYALTY_INTEGRATION_NOT_FOUND":
+                  return reply.code(404).send({
+                    error: "LOYALTY_INTEGRATION_NOT_FOUND",
+                    message:
+                      "The requested retailer integration was not found."
+                  });
+
+                case "LOYALTY_INTEGRATION_RETAILER_MISMATCH":
+                  return reply.code(409).send({
+                    error: "LOYALTY_INTEGRATION_RETAILER_MISMATCH",
+                    message:
+                      "The retailer integration does not belong to this loyalty programme."
+                  });
+
+                case "RETAILER_CONNECTION_ALREADY_EXISTS":
+                  return reply.code(409).send({
+                    error: "RETAILER_CONNECTION_ALREADY_EXISTS",
+                    message:
+                      "This loyalty account is already connected to this retailer integration."
+                  });
+
+                case "RETAILER_CONNECTION_NOT_ACTIVE":
+                  return reply.code(409).send({
+                    error: "RETAILER_CONNECTION_NOT_ACTIVE",
+                    message:
+                      "The retailer connection is not currently active."
+                  });
+
+                case "LOYALTY_INTEGRATION_NOT_ACTIVE":
+                  return reply.code(409).send({
+                    error: "LOYALTY_INTEGRATION_NOT_ACTIVE",
+                    message:
+                      "The retailer integration is not currently active."
+                  });
+
+                case "RETAILER_EXTERNAL_ACCOUNT_ID_REQUIRED":
+                  return reply.code(400).send({
+                    error: "RETAILER_EXTERNAL_ACCOUNT_ID_REQUIRED",
+                    message:
+                      "A retailer loyalty account identifier is required."
+                  });
+              }
+            }
+
+            throw error;
+          }
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * GET CURRENT USER'S RETAILER CONNECTION
+       * ------------------------------------------------------------------------
+       */
+
+      consumer.get<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/connection",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          const connection =
+            await consumer.prisma.retailerConnection.findFirst({
+              where: {
+                loyaltyAccountId: account.id
+              },
+              include: {
+                integration: {
+                  include: {
+                    retailer: true
+                  }
+                }
+              }
+            });
+
+          if (!connection) {
+            return reply.code(404).send({
+              error: "RETAILER_CONNECTION_NOT_FOUND",
+              message:
+                "This loyalty account is not connected to a retailer."
+            });
+          }
+
+          return connection;
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * SYNC CURRENT USER'S RETAILER CONNECTION
+       * ------------------------------------------------------------------------
+       *
+       * This asks the configured retailer provider for current retailer-side
+       * state and stores a new BargaiNest snapshot.
+       *
+       * IMPORTANT:
+       * The sync operation does NOT modify loyaltyAccount.pointsBalance.
+       */
+
+      consumer.post<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/sync",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          const connection =
+            await consumer.prisma.retailerConnection.findFirst({
+              where: {
+                loyaltyAccountId: account.id
+              }
+            });
+
+          if (!connection) {
+            return reply.code(404).send({
+              error: "RETAILER_CONNECTION_NOT_FOUND",
+              message:
+                "This loyalty account is not connected to a retailer."
+            });
+          }
+
+          try {
+            const service = new LoyaltySnapshotSyncService(
+              consumer.prisma
+            );
+
+            const result = await service.syncConnection(connection.id);
+
+            return reply.send(result);
+          } catch (error) {
+            if (error instanceof Error) {
+              switch (error.message) {
+                case "RETAILER_CONNECTION_NOT_FOUND":
+                  return reply.code(404).send({
+                    error: "RETAILER_CONNECTION_NOT_FOUND",
+                    message:
+                      "This loyalty account is not connected to a retailer."
+                  });
+
+                case "RETAILER_EXTERNAL_ACCOUNT_ID_REQUIRED":
+                  return reply.code(409).send({
+                    error: "RETAILER_EXTERNAL_ACCOUNT_ID_REQUIRED",
+                    message:
+                      "The retailer connection does not have an external account identifier."
+                  });
+              }
+
+              if (
+                error.message.startsWith(
+                  "RETAILER_CONNECTION_NOT_ACTIVE:"
+                )
+              ) {
+                return reply.code(409).send({
+                  error: "RETAILER_CONNECTION_NOT_ACTIVE",
+                  message:
+                    "The retailer connection is not currently active."
+                });
+              }
+            }
+
+            throw error;
+          }
+        }
+      );
+
+      /*
+       * ------------------------------------------------------------------------
+       * GET LATEST RETAILER SNAPSHOT
+       * ------------------------------------------------------------------------
+       *
+       * This is BargaiNest's latest observed view of the retailer's state.
+       * It is explicitly a snapshot, not the retailer's system of record.
+       */
+
+      consumer.get<{
+        Params: {
+          loyaltyAccountId: string;
+        };
+      }>(
+        "/loyalty-accounts/:loyaltyAccountId/snapshot",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          const account = await getOwnedLoyaltyAccount(
+            consumer,
+            userId,
+            request.params.loyaltyAccountId
+          );
+
+          if (!account) {
+            return reply.code(404).send({
+              error: "LOYALTY_ACCOUNT_NOT_FOUND",
+              message: "Loyalty account was not found."
+            });
+          }
+
+          const snapshot =
+            await consumer.prisma.loyaltySnapshot.findFirst({
+              where: {
+                loyaltyAccountId: account.id
+              },
+              orderBy: {
+                observedAt: "desc"
+              }
+            });
+
+          if (!snapshot) {
+            return reply.code(404).send({
+              error: "LOYALTY_SNAPSHOT_NOT_FOUND",
+              message:
+                "No retailer snapshot has been recorded for this loyalty account."
+            });
+          }
+
+          return snapshot;
+        }
+      );
+    },
+    {
+      prefix: "/me"
+    }
+  );
+}

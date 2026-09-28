@@ -1,0 +1,711 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model SystemHealth {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  @@map("system_health")
+}
+
+model User {
+  id                        String                    @id @default(uuid())
+  status                    UserStatus                @default(ACTIVE)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  intelligenceEvents        IntelligenceEvent[]
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  loyaltyAccounts           LoyaltyAccount[]
+  recommendations           Recommendation[]
+  shoppingLists             ShoppingList[]
+  transactions              ShoppingTransaction[]
+  identifiers               UserIdentifier[]
+  credential                UserCredential?
+  sessions                  AuthSession[]
+  profile                   UserProfile?
+
+  @@map("users")
+}
+
+model UserIdentifier {
+  id        String             @id @default(uuid())
+  userId    String
+  type      UserIdentifierType
+  value     String
+  verified  Boolean            @default(false)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([type, value])
+  @@index([userId])
+  @@map("user_identifiers")
+}
+
+model Retailer {
+  id                        String                    @id @default(uuid())
+  name                      String
+  code                      String                    @unique
+  status                    RetailerStatus            @default(ACTIVE)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  loyaltyPrograms           LoyaltyProgram[]
+  priceObservations         PriceObservation[]
+  products                  ProductRetailer[]
+  recommendations           Recommendation[]
+  branches                  RetailerBranch[]
+  transactions              ShoppingTransaction[]
+  integrations              Integration[]
+
+  @@map("retailers")
+}
+
+model RetailerBranch {
+  id         String         @id @default(uuid())
+  retailerId String
+  name       String
+  address    String?
+  latitude   Decimal?
+  longitude  Decimal?
+  status     RetailerStatus @default(ACTIVE)
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+  retailer   Retailer       @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([retailerId])
+  @@map("retailer_branches")
+}
+
+model LoyaltyProgram {
+  id         String               @id @default(uuid())
+  retailerId String
+  name       String
+  code       String
+  status     LoyaltyProgramStatus @default(ACTIVE)
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+  accounts   LoyaltyAccount[]
+  retailer   Retailer             @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@unique([retailerId, code])
+  @@index([retailerId])
+  @@map("loyalty_programs")
+}
+
+model LoyaltyAccount {
+  id                  String               @id @default(uuid())
+  userId              String
+  loyaltyProgramId    String
+  pointsBalance       Decimal              @default(0.000000000000000000000000000000)
+  status              LoyaltyAccountStatus @default(ACTIVE)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  accountNumber       String?
+  loyaltyProgram      LoyaltyProgram       @relation(fields: [loyaltyProgramId], references: [id], onDelete: Cascade)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activities          LoyaltyActivity[]
+  cards               LoyaltyCard[]
+  rewards             Reward[]
+  retailerConnections RetailerConnection[]
+  snapshots           LoyaltySnapshot[]
+
+  @@unique([userId, loyaltyProgramId])
+  @@index([userId])
+  @@index([loyaltyProgramId])
+  @@map("loyalty_accounts")
+}
+
+model LoyaltyCard {
+  id               String            @id @default(uuid())
+  loyaltyAccountId String
+  cardNumber       String            @unique
+  status           LoyaltyCardStatus @default(ACTIVE)
+  issuedAt         DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  loyaltyAccount   LoyaltyAccount    @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@map("loyalty_cards")
+}
+
+model LoyaltyActivity {
+  id               String              @id @default(uuid())
+  loyaltyAccountId String
+  type             LoyaltyActivityType
+  reference        String?
+  description      String?
+  occurredAt       DateTime            @default(now())
+  createdAt        DateTime            @default(now())
+  points           Decimal             @default(0.000000000000000000000000000000)
+  loyaltyAccount   LoyaltyAccount      @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([occurredAt])
+  @@map("loyalty_activities")
+}
+
+model Reward {
+  id               String         @id @default(uuid())
+  loyaltyAccountId String
+  type             RewardType
+  status           RewardStatus   @default(AVAILABLE)
+  description      String?
+  value            Decimal?
+  expiresAt        DateTime?
+  redeemedAt       DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  pointsRequired   Decimal?
+  title            String
+  loyaltyAccount   LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([status])
+  @@map("rewards")
+}
+
+model Product {
+  id                        String                    @id @default(uuid())
+  name                      String
+  description               String?
+  brand                     String?
+  category                  String?
+  unit                      String?
+  status                    ProductStatus             @default(ACTIVE)
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+  intelligenceOpportunities IntelligenceOpportunity[]
+  intelligenceSignals       IntelligenceSignal[]
+  priceObservations         PriceObservation[]
+  identifiers               ProductIdentifier[]
+  retailers                 ProductRetailer[]
+  recommendations           Recommendation[]
+  shoppingListItems         ShoppingListItem[]
+  transactionItems          ShoppingTransactionItem[]
+
+  @@index([name])
+  @@index([category])
+  @@map("products")
+}
+
+model ProductIdentifier {
+  id        String                @id @default(uuid())
+  productId String
+  type      ProductIdentifierType
+  value     String
+  createdAt DateTime              @default(now())
+  product   Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([type, value])
+  @@index([productId])
+  @@map("product_identifiers")
+}
+
+model ProductRetailer {
+  id           String   @id @default(uuid())
+  productId    String
+  retailerId   String
+  retailerSku  String?
+  currentPrice Decimal?
+  currency     String   @default("ZAR")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer     Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, retailerId])
+  @@index([retailerId])
+  @@map("product_retailers")
+}
+
+model PriceObservation {
+  id         String   @id @default(uuid())
+  productId  String
+  retailerId String
+  price      Decimal
+  currency   String   @default("ZAR")
+  observedAt DateTime @default(now())
+  source     String?
+  createdAt  DateTime @default(now())
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer   Retailer @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+
+  @@index([productId, observedAt])
+  @@index([retailerId, observedAt])
+  @@map("price_observations")
+}
+
+model ShoppingList {
+  id          String             @id @default(uuid())
+  userId      String
+  name        String
+  status      ShoppingListStatus @default(ACTIVE)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  completedAt DateTime?
+  items       ShoppingListItem[]
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("shopping_lists")
+}
+
+model ShoppingListItem {
+  id             String                 @id @default(uuid())
+  shoppingListId String
+  quantity       Decimal                @default(1.000000000000000000000000000000)
+  targetPrice    Decimal?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  description    String
+  productId      String?
+  status         ShoppingListItemStatus @default(ACTIVE)
+  product        Product?               @relation(fields: [productId], references: [id])
+  shoppingList   ShoppingList           @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+
+  @@index([shoppingListId])
+  @@index([productId])
+  @@map("shopping_list_items")
+}
+
+model ShoppingTransaction {
+  id                   String                    @id @default(uuid())
+  userId               String
+  retailerId           String?
+  status               TransactionStatus         @default(COMPLETED)
+  transactionReference String?
+  subtotal             Decimal?
+  discount             Decimal?
+  total                Decimal?
+  currency             String                    @default("ZAR")
+  purchasedAt          DateTime                  @default(now())
+  createdAt            DateTime                  @default(now())
+  items                ShoppingTransactionItem[]
+  retailer             Retailer?                 @relation(fields: [retailerId], references: [id])
+  user                 User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purchasedAt])
+  @@index([retailerId, purchasedAt])
+  @@map("shopping_transactions")
+}
+
+model ShoppingTransactionItem {
+  id            String              @id @default(uuid())
+  transactionId String
+  productId     String?
+  description   String
+  quantity      Decimal             @default(1.000000000000000000000000000000)
+  unitPrice     Decimal?
+  discount      Decimal?
+  totalPrice    Decimal?
+  createdAt     DateTime            @default(now())
+  product       Product?            @relation(fields: [productId], references: [id])
+  transaction   ShoppingTransaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@index([productId])
+  @@map("shopping_transaction_items")
+}
+
+model IntelligenceSignal {
+  id         String                   @id @default(uuid())
+  userId     String?
+  productId  String?
+  retailerId String?
+  type       IntelligenceSignalType
+  status     IntelligenceSignalStatus @default(ACTIVE)
+  signalKey  String
+  value      Decimal?
+  confidence Decimal?
+  metadata   Json?
+  observedAt DateTime                 @default(now())
+  expiresAt  DateTime?
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+  product    Product?                 @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer   Retailer?                @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user       User?                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([productId, type])
+  @@index([retailerId, type])
+  @@index([status])
+  @@index([signalKey])
+  @@map("intelligence_signals")
+}
+
+model IntelligenceOpportunity {
+  id               String            @id @default(uuid())
+  userId           String?
+  productId        String?
+  retailerId       String?
+  type             OpportunityType
+  status           OpportunityStatus @default(OPEN)
+  title            String
+  description      String?
+  estimatedSaving  Decimal?
+  currentPrice     Decimal?
+  alternativePrice Decimal?
+  currency         String            @default("ZAR")
+  score            Decimal?
+  confidence       Decimal?
+  metadata         Json?
+  detectedAt       DateTime          @default(now())
+  expiresAt        DateTime?
+  viewedAt         DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  product          Product?          @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer         Retailer?         @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user             User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([productId, type])
+  @@index([retailerId, type])
+  @@index([status])
+  @@index([detectedAt])
+  @@map("intelligence_opportunities")
+}
+
+model Recommendation {
+  id          String               @id @default(uuid())
+  userId      String
+  productId   String?
+  retailerId  String?
+  type        RecommendationType
+  status      RecommendationStatus @default(GENERATED)
+  title       String
+  description String?
+  score       Decimal?
+  confidence  Decimal?
+  reason      String?
+  metadata    Json?
+  generatedAt DateTime             @default(now())
+  expiresAt   DateTime?
+  viewedAt    DateTime?
+  completedAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  product     Product?             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  retailer    Retailer?            @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, type])
+  @@index([productId])
+  @@index([retailerId])
+  @@index([generatedAt])
+  @@map("recommendations")
+}
+
+model IntelligenceEvent {
+  id         String                @id @default(uuid())
+  userId     String?
+  type       IntelligenceEventType
+  entityType String?
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime              @default(now())
+  user       User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([entityType, entityId])
+  @@map("intelligence_events")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum UserIdentifierType {
+  EMAIL
+  PHONE
+  EXTERNAL
+}
+
+enum RetailerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum LoyaltyProgramStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum LoyaltyAccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  EXPIRED
+}
+
+enum LoyaltyCardStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  REPLACED
+}
+
+enum LoyaltyActivityType {
+  EARN
+  REDEEM
+  BONUS
+  ADJUSTMENT
+  EXPIRY
+  REVERSAL
+  OTHER
+}
+
+enum RewardType {
+  POINTS
+  DISCOUNT
+  VOUCHER
+  CASHBACK
+  BENEFIT
+  OTHER
+}
+
+enum RewardStatus {
+  AVAILABLE
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ProductIdentifierType {
+  SKU
+  BARCODE
+  GTIN
+  PLU
+  EXTERNAL
+}
+
+enum ShoppingListStatus {
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+enum ShoppingListItemStatus {
+  ACTIVE
+  PURCHASED
+  REMOVED
+}
+
+enum TransactionStatus {
+  COMPLETED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum IntelligenceSignalType {
+  PRICE
+  PURCHASE
+  LOYALTY
+  REWARD
+  SHOPPING
+  SAVING
+  PREFERENCE
+  BEHAVIOUR
+  RETAILER
+  PRODUCT
+  OTHER
+}
+
+enum IntelligenceSignalStatus {
+  ACTIVE
+  PROCESSED
+  EXPIRED
+  DISMISSED
+}
+
+enum OpportunityType {
+  BETTER_PRICE
+  LOYALTY_BENEFIT
+  REWARD
+  BASKET_SAVING
+  PRODUCT_SUBSTITUTION
+  RETAILER_COMPARISON
+  SHOPPING_OPTIMISATION
+  PRICE_DROP
+  OTHER
+}
+
+enum OpportunityStatus {
+  OPEN
+  VIEWED
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+  COMPLETED
+}
+
+enum RecommendationType {
+  PRODUCT
+  RETAILER
+  OFFER
+  LOYALTY
+  SAVING
+  SHOPPING_LIST
+  BASKET
+  OTHER
+}
+
+enum RecommendationStatus {
+  GENERATED
+  VIEWED
+  ACCEPTED
+  DISMISSED
+  EXPIRED
+  COMPLETED
+}
+
+enum IntelligenceEventType {
+  SIGNAL_CREATED
+  SIGNAL_PROCESSED
+  OPPORTUNITY_CREATED
+  OPPORTUNITY_VIEWED
+  OPPORTUNITY_ACCEPTED
+  OPPORTUNITY_DISMISSED
+  RECOMMENDATION_CREATED
+  RECOMMENDATION_VIEWED
+  RECOMMENDATION_ACCEPTED
+  RECOMMENDATION_DISMISSED
+  OTHER
+}
+
+model UserCredential {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_credentials")
+}
+
+model AuthSession {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+  revokedAt  DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+enum RetailerConnectionStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+  DISCONNECTED
+}
+
+enum IntegrationStatus {
+  ACTIVE
+  INACTIVE
+  DEVELOPMENT
+  DEPRECATED
+}
+
+model Integration {
+  id          String            @id @default(uuid())
+  retailerId  String
+  code        String            @unique
+  name        String
+  status      IntegrationStatus @default(DEVELOPMENT)
+  description String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  retailer            Retailer             @relation(fields: [retailerId], references: [id], onDelete: Cascade)
+  retailerConnections RetailerConnection[]
+
+  @@index([retailerId])
+  @@index([status])
+  @@map("integrations")
+}
+
+model RetailerConnection {
+  id                String                   @id @default(uuid())
+  loyaltyAccountId  String
+  integrationId     String
+  status            RetailerConnectionStatus @default(PENDING)
+  externalAccountId String?
+  connectedAt       DateTime?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+  integration    Integration    @relation(fields: [integrationId], references: [id], onDelete: Restrict)
+
+  @@unique([loyaltyAccountId, integrationId])
+  @@index([loyaltyAccountId])
+  @@index([integrationId])
+  @@index([status])
+  @@map("retailer_connections")
+}
+
+model LoyaltySnapshot {
+  id               String   @id @default(uuid())
+  loyaltyAccountId String
+  balance          Decimal  @default(0.000000000000000000000000000000)
+  source           String?
+  sourceReference  String?
+  observedAt       DateTime
+  syncedAt         DateTime
+  createdAt        DateTime @default(now())
+
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyAccountId], references: [id], onDelete: Cascade)
+
+  @@index([loyaltyAccountId])
+  @@index([observedAt])
+  @@map("loyalty_snapshots")
+}
+
+model UserProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  firstName String?
+  lastName  String?
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
