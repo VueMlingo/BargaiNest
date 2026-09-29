@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>BargaiNest Wallet — Pilot</title>
+<meta name="description" content="BargaiNest loyalty wallet — pilot application.">
+<link rel="icon" href="images/bargainest-icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=4">
+</head>
+<body>
+
+<div class="app-shell">
+
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img class="brand-logo" src="images/bargainest-master.svg?v=4" alt="BargaiNest — Store. Shop. Save.">
+    </div>
+
+    <div class="topbar-search">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      <input id="topbar-search-input" placeholder="Search your cards…" oninput="App.query = this.value; if (App.view !== 'wallet') App.setView('wallet'); else App.renderView();">
+    </div>
+
+    <div class="topbar-right">
+      <div class="topbar-clock">
+        <span class="time" id="clock-time">--:--</span>
+        <span class="date" id="clock-date">—</span>
+      </div>
+      <button class="icon-btn" aria-label="Notifications" data-action="soon" onclick="App.toast('No new notifications')">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      </button>
+      <button class="user-chip" onclick="App.setView('profile')" aria-label="Profile">
+        <div class="user-avatar" id="user-initial">B</div>
+        <div class="user-chip-name">
+          <span class="name" id="user-name-display">BargaiNest Member</span>
+          <span class="role" id="user-role-display"></span>
+        </div>
+      </button>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <aside class="sidebar">
+      <button class="sidebar-add-btn" onclick="App.handleAction('open-add')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        Add a card
+      </button>
+      <nav class="sidebar-nav">
+        <button class="sidebar-link" data-nav="home" onclick="App.setView('home')">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+          Home
+        </button>
+        <button class="sidebar-link" data-nav="wallet" onclick="App.setView('wallet')">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+          Wallet
+        </button>
+        <button class="sidebar-link" data-nav="ai" onclick="App.setView('ai')">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.9L19 9.8l-5.1 1.9L12 17l-1.9-5.3L5 9.8l5.1-1.9L12 3Z"/></svg>
+          AI Assistant
+        </button>
+        <button class="sidebar-link" data-nav="profile" onclick="App.setView('profile')">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>
+          Profile
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        BargaiNest Wallet<br>Pilot Release · API-backed build
+      </div>
+    </aside>
+
+    <main class="view-root" id="view-root"></main>
+  </div>
+
+  <footer class="app-footer">
+    <img src="images/bargainest-mono-white.svg?v=2" alt="">
+    <span>BargaiNest Wallet — Pilot build · Anthill Solutions (Pty) Ltd</span>
+  </footer>
+
+  <nav class="bottom-nav">
+    <button class="bottom-nav-link" data-nav="home" onclick="App.setView('home')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+      <span class="label">Home</span>
+    </button>
+    <button class="bottom-nav-link" data-nav="wallet" onclick="App.setView('wallet')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+      <span class="label">Wallet</span>
+    </button>
+    <button class="bottom-nav-link" data-nav="ai" onclick="App.setView('ai')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 4.9L19 9.8l-5.1 1.9L12 17l-1.9-5.3L5 9.8l5.1-1.9L12 3Z"/></svg>
+      <span class="label">AI Assist</span>
+    </button>
+    <button class="bottom-nav-link" data-nav="profile" onclick="App.setView('profile')">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-7 8-7s8 3 8 7"/></svg>
+      <span class="label">Profile</span>
+    </button>
+  </nav>
+
+  <div id="overlay-root"></div>
+  <div id="toast-root"></div>
+
+</div>
+
+<script src="js/state.js?v=4"></script>
+<script src="js/app.js?v=4"></script>
+</body>
+</html>

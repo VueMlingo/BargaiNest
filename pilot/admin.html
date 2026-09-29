@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BargaiNest — Support Admin</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 24px 16px; background: #fafafa; color: #1a1a1a; }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #666; font-size: 13px; margin-bottom: 24px; }
+  .secret-bar { display: flex; gap: 8px; margin-bottom: 20px; }
+  input[type="password"], input[type="text"], textarea { flex: 1; padding: 10px 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 14px; font-family: inherit; }
+  textarea { width: 100%; min-height: 80px; margin-top: 8px; box-sizing: border-box; }
+  button { padding: 10px 16px; border: none; border-radius: 8px; background: #6F4BAE; color: white; font-size: 14px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.secondary { background: #eee; color: #333; }
+  .filters { display: flex; gap: 8px; margin-bottom: 16px; }
+  .filters button { background: #eee; color: #333; padding: 6px 12px; font-size: 13px; }
+  .filters button.active { background: #6F4BAE; color: white; }
+  .card { background: white; border: 1px solid #e5e5e5; border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .card-subject { font-weight: 600; font-size: 14px; }
+  .card-meta { font-size: 12px; color: #888; margin-top: 2px; }
+  .card-message { font-size: 13px; margin-top: 10px; white-space: pre-wrap; color: #333; }
+  .status { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .status.OPEN { background: #FDF3DC; color: #8A6A16; }
+  .status.RESOLVED { background: #E8F6E8; color: #2F7A38; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .empty { text-align: center; color: #888; padding: 40px 0; font-size: 14px; }
+  .error { background: #fde8e8; color: #a33; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<h1>Support requests</h1>
+<div class="sub">
+  BN-047 — no per-staff-member login exists yet (this is a consumer-only pilot),
+  so access here is gated by a shared internal secret rather than a real admin
+  account. See BN-047-SUPPORT-ADMIN.md for why.
+</div>
+
+<div class="secret-bar">
+  <input type="password" id="secret-input" placeholder="Internal secret">
+  <button id="connect-btn">Connect</button>
+</div>
+
+<div id="app" style="display:none">
+  <div class="filters">
+    <button data-status="" class="active">All</button>
+    <button data-status="OPEN">Open</button>
+    <button data-status="RESOLVED">Resolved</button>
+    <button id="refresh-btn" class="secondary" style="margin-left:auto">Refresh</button>
+  </div>
+  <div id="error-root"></div>
+  <div id="list-root"></div>
+</div>
+
+<script>
+(function () {
+  var API_BASE = "https://api.anthillsolutions.co.za/api/v1";
+  var secret = "";
+  var currentStatus = "";
+  var requests = [];
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function formatDate(iso) {
+    if (!iso) return "";
+    try {
+      return new Intl.DateTimeFormat("en-ZA", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+    } catch (e) { return iso; }
+  }
+
+  async function apiCall(path, options) {
+    options = options || {};
+    var res = await fetch(API_BASE.replace(/\/$/, "") + path, {
+      method: options.method || "GET",
+      headers: Object.assign({ "Content-Type": "application/json", "x-internal-secret": secret }, options.headers || {}),
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+    if (!res.ok) {
+      var body = await res.json().catch(function () { return {}; });
+      var err = new Error(body.message || ("Request failed (" + res.status + ")"));
+      err.status = res.status;
+      throw err;
+    }
+    return res.json();
+  }
+
+  function showError(message) {
+    document.getElementById("error-root").innerHTML = message
+      ? '<div class="error">' + escapeHtml(message) + "</div>"
+      : "";
+  }
+
+  function renderList() {
+    var root = document.getElementById("list-root");
+    if (!requests.length) {
+      root.innerHTML = '<div class="empty">No support requests' + (currentStatus ? " with status " + currentStatus : "") + ".</div>";
+      return;
+    }
+
+    root.innerHTML = requests.map(function (r) {
+      var actions = "";
+      if (r.status === "OPEN") {
+        actions =
+          '<div class="actions">' +
+          '<button class="secondary" data-action="resolve" data-id="' + r.id + '">Mark resolved</button>' +
+          "</div>" +
+          '<textarea placeholder="Type a reply…" data-reply-for="' + r.id + '"></textarea>' +
+          '<div class="actions">' +
+          '<button data-action="reply" data-id="' + r.id + '">Send reply &amp; resolve</button>' +
+          "</div>";
+      }
+
+      return (
+        '<div class="card">' +
+        '<div class="card-header"><div>' +
+        '<div class="card-subject">' + escapeHtml(r.subject) + "</div>" +
+        '<div class="card-meta">' + escapeHtml(r.email) + " · " + formatDate(r.createdAt) + "</div>" +
+        "</div>" +
+        '<span class="status ' + r.status + '">' + r.status + "</span>" +
+        "</div>" +
+        '<div class="card-message">' + escapeHtml(r.message) + "</div>" +
+        actions +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  async function loadRequests() {
+    showError("");
+    try {
+      var query = currentStatus ? "?status=" + encodeURIComponent(currentStatus) : "";
+      requests = await apiCall("/internal/support/requests" + query);
+      renderList();
+    } catch (error) {
+      showError(error.message);
+      throw error;
+    }
+  }
+
+  document.getElementById("connect-btn").addEventListener("click", async function () {
+    secret = document.getElementById("secret-input").value.trim();
+    if (!secret) return;
+    try {
+      await loadRequests();
+      document.getElementById("app").style.display = "block";
+    } catch (error) {
+      showError(error.message);
+    }
+  });
+
+  document.getElementById("refresh-btn").addEventListener("click", function () {
+    loadRequests().catch(function () { /* already shown via showError() */ });
+  });
+
+  document.querySelectorAll(".filters button[data-status]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".filters button[data-status]").forEach(function (b) { b.classList.remove("active"); });
+      btn.classList.add("active");
+      currentStatus = btn.getAttribute("data-status");
+      loadRequests().catch(function () { /* already shown via showError() */ });
+    });
+  });
+
+  document.getElementById("list-root").addEventListener("click", async function (e) {
+    var target = e.target;
+    var action = target.getAttribute("data-action");
+    if (!action) return;
+    var id = target.getAttribute("data-id");
+
+    target.disabled = true;
+    try {
+      if (action === "resolve") {
+        await apiCall("/internal/support/requests/" + encodeURIComponent(id) + "/resolve", { method: "POST" });
+      } else if (action === "reply") {
+        var textarea = document.querySelector('textarea[data-reply-for="' + id + '"]');
+        var message = textarea ? textarea.value.trim() : "";
+        if (!message) { showError("Enter a reply message first."); target.disabled = false; return; }
+        await apiCall("/internal/support/requests/" + encodeURIComponent(id) + "/reply", { method: "POST", body: { message: message } });
+      }
+      await loadRequests();
+    } catch (error) {
+      showError(error.message);
+      target.disabled = false;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
