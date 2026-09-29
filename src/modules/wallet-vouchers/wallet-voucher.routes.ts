@@ -2,12 +2,14 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { requireAuth } from "../auth/auth.middleware.js";
+import { TesseractOcrService } from "../../integrations/ocr/ocr.service.js";
 import {
   createWalletVoucher,
   listWalletVouchersForUser,
   getWalletVoucherForUser,
   redeemWalletVoucher,
 } from "./wallet-voucher.service.js";
+import { parseVoucherText } from "./voucher-ocr-parser.service.js";
 
 function getAuthenticatedUserId(request: { currentUserId?: string }): string {
   if (!request.currentUserId) {
@@ -16,12 +18,18 @@ function getAuthenticatedUserId(request: { currentUserId?: string }): string {
   return request.currentUserId;
 }
 
+const extractVoucherSchema = z.object({
+  imageBase64: z.string().min(1),
+});
+
 const createWalletVoucherSchema = z.object({
   retailerName: z.string().trim().min(1).max(191),
   barcode: z.string().trim().min(1).max(191),
   barcodeFormat: z.string().trim().min(1).max(50).nullable().optional(),
+  voucherNumber: z.string().trim().min(1).max(191).nullable().optional(),
   value: z.coerce.number().positive(),
   currency: z.string().trim().length(3).optional(),
+  validFrom: z.coerce.date().nullable().optional(),
   expiresAt: z.coerce.date().nullable().optional(),
   sourcePurchaseId: z.string().uuid().nullable().optional(),
 });
@@ -30,6 +38,59 @@ export async function registerWalletVoucherRoutes(api: FastifyInstance): Promise
   await api.register(
     async (scope) => {
       scope.addHook("preHandler", requireAuth);
+
+      /*
+       * REG-004: OCR + parse only -- deliberately does NOT persist
+       * anything. Reuses the exact same TesseractOcrService already
+       * built for receipt scanning (no parallel OCR implementation),
+       * pointed at whatever text is printed on the voucher, then runs
+       * it through the voucher-specific field parser. The caller
+       * (frontend) shows these as pre-filled, editable form fields --
+       * the user reviews and corrects before ever calling the real
+       * POST /wallet-vouchers below to actually save.
+       */
+      scope.post<{ Querystring: { debug?: string } }>(
+        "/wallet-vouchers/extract",
+        { bodyLimit: 15 * 1024 * 1024 },
+        async (request, reply) => {
+          const parsed = extractVoucherSchema.safeParse(request.body ?? {});
+          const debugMode = request.query.debug === "true";
+
+          if (!parsed.success) {
+            return reply.code(400).send({
+              error: "INVALID_REQUEST",
+              message: "A base64-encoded voucher image is required.",
+            });
+          }
+
+          let imageBuffer: Buffer;
+          try {
+            imageBuffer = Buffer.from(parsed.data.imageBase64, "base64");
+          } catch {
+            return reply.code(400).send({
+              error: "INVALID_IMAGE",
+              message: "The provided image data could not be decoded.",
+            });
+          }
+
+          try {
+            const ocrService = new TesseractOcrService();
+            const rawText = await ocrService.recognizeText(imageBuffer);
+            const fields = parseVoucherText(rawText);
+
+            return reply.send({
+              ...fields,
+              ...(debugMode ? { debugRawOcrText: rawText } : {}),
+            });
+          } catch (error) {
+            request.log.error(error, "voucher extraction failed");
+            return reply.code(500).send({
+              error: "VOUCHER_EXTRACTION_FAILED",
+              message: "Unable to read this voucher right now. You can still enter the details manually.",
+            });
+          }
+        },
+      );
 
       scope.post("/wallet-vouchers", async (request, reply) => {
         const userId = getAuthenticatedUserId(request);
@@ -46,8 +107,10 @@ export async function registerWalletVoucherRoutes(api: FastifyInstance): Promise
           retailerName: parsed.data.retailerName,
           barcode: parsed.data.barcode,
           ...(parsed.data.barcodeFormat !== undefined ? { barcodeFormat: parsed.data.barcodeFormat } : {}),
+          ...(parsed.data.voucherNumber !== undefined ? { voucherNumber: parsed.data.voucherNumber } : {}),
           value: parsed.data.value,
           ...(parsed.data.currency !== undefined ? { currency: parsed.data.currency } : {}),
+          ...(parsed.data.validFrom !== undefined ? { validFrom: parsed.data.validFrom } : {}),
           ...(parsed.data.expiresAt !== undefined ? { expiresAt: parsed.data.expiresAt } : {}),
           ...(parsed.data.sourcePurchaseId !== undefined ? { sourcePurchaseId: parsed.data.sourcePurchaseId } : {}),
         });

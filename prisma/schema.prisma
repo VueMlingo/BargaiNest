@@ -861,8 +861,16 @@ model WalletVoucher {
   retailerName     String
   barcode          String
   barcodeFormat    String?
+  /*
+   * REG-008: deliberately a separate field from `barcode`. Many real
+   * vouchers print both a scannable barcode AND a distinct, shorter
+   * human-readable reference/voucher number.
+   */
+  voucherNumber    String?
   value            Decimal
   currency         String              @default("ZAR")
+  /* REG-004: valid-from date is deliberately separate from expiresAt. */
+  validFrom        DateTime?
   expiresAt        DateTime?
   status           WalletVoucherStatus @default(ACTIVE)
   redeemedAt       DateTime?

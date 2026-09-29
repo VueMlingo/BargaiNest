@@ -4,8 +4,10 @@ export interface CreateWalletVoucherInput {
   retailerName: string;
   barcode: string;
   barcodeFormat?: string | null;
+  voucherNumber?: string | null;
   value: number;
   currency?: string;
+  validFrom?: Date | null;
   expiresAt?: Date | null;
   sourcePurchaseId?: string | null;
 }
@@ -69,8 +71,10 @@ export async function createWalletVoucher(
       retailerName: input.retailerName,
       barcode: input.barcode,
       barcodeFormat: input.barcodeFormat ?? null,
+      voucherNumber: input.voucherNumber ?? null,
       value: input.value,
       currency: input.currency ?? "ZAR",
+      validFrom: input.validFrom ?? null,
       expiresAt: input.expiresAt ?? null,
       sourcePurchaseId: input.sourcePurchaseId ?? null,
     },
