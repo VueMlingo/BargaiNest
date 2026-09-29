@@ -929,6 +929,20 @@ const App = {
      HELPERS
      ======================================================================== */
 
+  /**
+   * REG-001: the dashboard hero panel previously showed a raw sum
+   * across all cards, which reads as "R0.00 / 0 points" even when NO
+   * card has ever actually synced -- indistinguishable from a
+   * genuinely confirmed zero. Uses the same lastSyncedAt signal
+   * already correctly used in Wallet's per-card view (see
+   * rewardHeadline) and Insights' per-retailer breakdown, applied
+   * here at the aggregate level: if the user has cards but none of
+   * them has ever synced, there is nothing real to sum yet.
+   */
+  hasAnySyncedCard() {
+    return this.data.cards.some((c) => c.lastSyncedAt);
+  },
+
   totals() {
 
     const cards =
@@ -1211,9 +1225,17 @@ const App = {
     html +=
       '<div class="hero-panel"><div class="hero-label">Total rewards value</div>';
 
+    // REG-001: cards.length > 0 but hasAnySyncedCard() false means
+    // every card is genuinely unsynced -- nothing real to report yet,
+    // as opposed to a wallet with zero cards at all (nothing to sync,
+    // R0.00 is the honest answer there) or cards that have actually
+    // synced and confirmed a real total (possibly a real zero).
+    const pendingSync =
+      this.data.cards.length > 0 && !this.hasAnySyncedCard();
+
     html +=
       '<div class="hero-value" id="hero-count">' +
-      formatRand(t.value) +
+      (pendingSync ? "Pending sync" : formatRand(t.value)) +
       "</div>";
 
     html +=
@@ -1226,18 +1248,18 @@ const App = {
 
     html +=
       '<div class="hero-stat"><div class="num">' +
-      t.points.toLocaleString("en-ZA") +
-      '</div><div class="lbl">Points</div></div>';
+      (pendingSync ? "—" : t.points.toLocaleString("en-ZA")) +
+      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Points") + '</div></div>';
 
     html +=
       '<div class="hero-stat"><div class="num">' +
-      formatRand(t.cashback) +
-      '</div><div class="lbl">Cashback</div></div>';
+      (pendingSync ? "—" : formatRand(t.cashback)) +
+      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Cashback") + '</div></div>';
 
     html +=
       '<div class="hero-stat"><div class="num">' +
-      t.vouchers +
-      '</div><div class="lbl">Vouchers</div></div>';
+      (pendingSync ? "—" : t.vouchers) +
+      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Vouchers") + '</div></div>';
 
     html += "</div></div>";
 
@@ -2227,6 +2249,10 @@ const App = {
 
     else if (this.overlay === "purchases") {
       inner = this.renderPurchasesOverlay();
+    }
+
+    else if (this.overlay === "purchaseDetail") {
+      inner = this.renderPurchaseDetailOverlay();
     }
 
     root.innerHTML =
@@ -3636,11 +3662,18 @@ const App = {
       retailers: [],
     };
 
+    // REG-001: same distinction as the dashboard -- accounts existing
+    // but none ever having synced is not the same as a confirmed
+    // zero across the board.
+    const insightsPendingSync =
+      insights.totalLoyaltyAccounts > 0 &&
+      !insights.retailers.some((r) => r.lastSyncedAt);
+
     html += '<div class="hero-stats" style="margin-bottom:18px">';
     html += '<div class="hero-stat"><div class="num">' + insights.totalLoyaltyAccounts + '</div><div class="lbl">Loyalty accounts</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + insights.totalPoints.toLocaleString("en-ZA") + '</div><div class="lbl">Points</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + insights.totalAvailableRewards + '</div><div class="lbl">Rewards</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + insights.totalAvailableVouchers + '</div><div class="lbl">Vouchers</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalPoints.toLocaleString("en-ZA")) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Points") + '</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalAvailableRewards) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Rewards") + '</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalAvailableVouchers) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Vouchers") + '</div></div>';
     html += "</div>";
 
     if (insights.totalAvailableRewardValue > 0 || insights.totalAvailableVoucherValue > 0) {
@@ -3692,37 +3725,55 @@ const App = {
       return html;
     }
 
-    if (this.receiptScanResult) {
-      const r = this.receiptScanResult;
-      const items = (r.purchase && r.purchase.items) || [];
+    if (this.receiptReview) {
+      const review = this.receiptReview;
 
-      html += '<div class="bn-eyebrow">' + (r.retailerName ? this.escapeHtml(r.retailerName) : "RECEIPT") + '</div>';
-      html += '<p style="font-size:12px;color:var(--grey-muted);margin:6px 0 16px">' + items.length + ' item' + (items.length === 1 ? "" : "s") + ' found and saved to your purchase history.</p>';
+      html += '<div class="bn-eyebrow">' + (review.retailerName ? this.escapeHtml(review.retailerName) : "RECEIPT") + '</div>';
+      html += '<p style="font-size:12px;color:var(--grey-muted);margin:6px 0 16px">Review what we read from your receipt. Edit anything that\'s wrong, remove items that shouldn\'t be there, or add anything we missed -- nothing is saved until you confirm.</p>';
+
+      if (this.receiptConfirmError) {
+        html += '<div class="auth-error" style="margin-bottom:14px">' + this.escapeHtml(this.receiptConfirmError) + '</div>';
+      }
 
       html += '<div class="bn-detail-list">';
-      items.forEach((item) => {
+      review.items.forEach((item, index) => {
         const promoBadge = item.matchedPromotionName
           ? (item.paidPromoPrice
               ? '<span class="chip" style="background:var(--green-tint);color:var(--green-deep);font-size:10px;margin-left:6px">PROMO PRICE</span>'
               : '<span class="chip" style="background:var(--gold-tint);color:var(--gold-deep);font-size:10px;margin-left:6px">PROMO AVAILABLE</span>')
           : "";
         html +=
-          '<div class="bn-detail-row" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
-          '<span>' + this.escapeHtml(item.name) + promoBadge + '</span>' +
-          '<strong>' + formatRand(Number(item.price)) + '</strong></div>';
+          '<div class="bn-detail-row" style="padding:10px 0;border-bottom:1px solid var(--line);gap:8px">' +
+          '<input class="text-input" data-receipt-review-field="name" data-index="' + index + '" type="text" value="' + this.escapeAttr(item.name) + '" style="flex:1" ' + (this.receiptConfirmBusy ? "disabled" : "") + '>' +
+          promoBadge +
+          '<input class="text-input" data-receipt-review-field="price" data-index="' + index + '" type="number" min="0" step="0.01" value="' + this.escapeAttr(item.price) + '" style="width:90px" ' + (this.receiptConfirmBusy ? "disabled" : "") + '>' +
+          '<button class="btn btn-secondary" data-action="remove-receipt-review-item" data-index="' + index + '" aria-label="Remove item" style="padding:6px 10px;flex-shrink:0" ' + (this.receiptConfirmBusy ? "disabled" : "") + '>' + ICONS.x + '</button>' +
+          '</div>';
       });
       html += "</div>";
 
-      if (r.purchase && r.purchase.totalAmount != null) {
+      if (!review.items.length) {
+        html += '<p style="font-size:12px;color:var(--grey-muted);margin:12px 0">No items yet -- add one below, or go back and try scanning again.</p>';
+      }
+
+      html += '<button class="btn btn-secondary btn-block" data-action="add-receipt-review-item" style="margin-top:10px" ' + (this.receiptConfirmBusy ? "disabled" : "") + '>' + ICONS.plus + ' Add an item</button>';
+
+      if (review.total != null) {
         html += '<div style="display:flex;justify-content:space-between;padding:14px 0;font-weight:600">' +
-          '<span>Total</span><span>' + formatRand(Number(r.purchase.totalAmount)) + '</span></div>';
+          '<span>Receipt total (from OCR, not a line item)</span><span>' + formatRand(Number(review.total)) + '</span></div>';
       }
 
-      if (r.unmatchedItemCount === items.length && items.length > 0) {
-        html += '<p style="font-size:11px;color:var(--grey-muted);margin-top:10px">No current promotions matched these items.</p>';
-      }
+      html += '<button class="btn btn-primary btn-block" data-action="confirm-receipt-save" style="margin-top:12px" ' + (this.receiptConfirmBusy || !review.items.length ? "disabled" : "") + '>' +
+        (this.receiptConfirmBusy ? "Saving…" : "Confirm and save") + '</button>';
+      html += '<button class="btn btn-secondary btn-block" data-action="close-overlay" style="margin-top:8px" ' + (this.receiptConfirmBusy ? "disabled" : "") + '>Discard</button>';
 
-      html += '<button class="btn btn-primary btn-block" data-action="close-overlay" style="margin-top:16px">Done</button>';
+      html += "</div>";
+      return html;
+    }
+
+    if (this.receiptSavedMessage) {
+      html += '<p style="font-size:13px;color:var(--grey-muted);text-align:center;margin:30px 0">' + this.escapeHtml(this.receiptSavedMessage) + '</p>';
+      html += '<button class="btn btn-primary btn-block" data-action="close-overlay">Done</button>';
       html += "</div>";
       return html;
     }
@@ -3769,17 +3820,154 @@ const App = {
       const date = p.purchasedAt ? new Intl.DateTimeFormat("en-ZA", { day: "numeric", month: "short", year: "numeric" }).format(new Date(p.purchasedAt)) : "";
       const itemCount = (p.items || []).length;
       html +=
-        '<div class="bn-detail-row" style="padding:12px 0;border-bottom:1px solid var(--line)"><div>' +
+        '<button class="wallet-list-row" data-action="open-purchase-detail" data-id="' + this.escapeAttr(p.id) + '" style="width:100%;text-align:left;border:none;background:none;padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer">' +
+        '<div class="bn-detail-row"><div>' +
         '<span class="bn-detail-label">' + this.escapeHtml(p.retailerName || "Purchase") + '</span>' +
         '<div style="font-size:11px;color:var(--grey-muted);margin-top:2px">' + date + ' · ' + itemCount + ' item' + (itemCount === 1 ? "" : "s") +
         (p.source === "MANUAL" ? " · Logged manually" : "") + '</div></div>' +
         (p.totalAmount != null ? '<strong>' + formatRand(Number(p.totalAmount)) + '</strong>' : "") +
-        '</div>';
+        '</div></button>';
     });
     html += "</div>";
 
     html += "</div>";
     return html;
+  },
+
+  /**
+   * REG-006: reuses the existing GET /me/purchases/:id endpoint
+   * (already built for BN-028) -- no new backend model or endpoint
+   * needed, since purchases/purchase_items already are the right
+   * foundation.
+   */
+  async openPurchaseDetail(purchaseId) {
+    this.overlay = "purchaseDetail";
+    this.purchaseDetailBusy = true;
+    this.purchaseDetailError = "";
+    this.purchaseDetailMessage = "";
+    this.purchaseDetail = null;
+    this.renderOverlay();
+    try {
+      this.purchaseDetail = await apiGet("/me/purchases/" + encodeURIComponent(purchaseId));
+    } catch (error) {
+      this.purchaseDetailError = this.userFacingError(error);
+    } finally {
+      this.purchaseDetailBusy = false;
+      this.renderOverlay();
+    }
+  },
+
+  renderPurchaseDetailOverlay() {
+    let html = "";
+    html +=
+      '<div class="overlay-header"><button class="overlay-back" data-action="open-purchases" aria-label="Back">' +
+      ICONS.chevronLeft + '</button><span class="title">Purchase</span>' +
+      '<button class="overlay-close" data-action="close-overlay" aria-label="Close">' + ICONS.x + '</button></div>';
+    html += '<div class="overlay-body">';
+
+    if (this.purchaseDetailBusy) {
+      html += '<p style="font-size:13px;color:var(--grey-muted)">Loading…</p>';
+      html += "</div>";
+      return html;
+    }
+
+    if (this.purchaseDetailError) {
+      html += '<div class="auth-error">' + this.escapeHtml(this.purchaseDetailError) + '</div>';
+      html += "</div>";
+      return html;
+    }
+
+    const purchase = this.purchaseDetail;
+    if (!purchase) {
+      html += '<div class="bn-benefits-empty">This purchase could not be found.</div></div>';
+      return html;
+    }
+
+    if (this.purchaseDetailMessage) {
+      html += '<div class="auth-error" style="margin-bottom:14px;background:var(--green-tint);color:var(--green-deep)">' + this.escapeHtml(this.purchaseDetailMessage) + '</div>';
+    }
+
+    const date = purchase.purchasedAt ? new Intl.DateTimeFormat("en-ZA", { day: "numeric", month: "short", year: "numeric" }).format(new Date(purchase.purchasedAt)) : "";
+    html += '<div class="bn-eyebrow">' + this.escapeHtml(purchase.retailerName || "Purchase") + '</div>';
+    html += '<p style="font-size:12px;color:var(--grey-muted);margin:6px 0 16px">' + date + '</p>';
+
+    const items = purchase.items || [];
+    html += '<div class="bn-detail-list">';
+    items.forEach((item) => {
+      html +=
+        '<div class="bn-detail-row" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+        '<span>' + this.escapeHtml(item.name) + '</span>' +
+        '<strong>' + formatRand(Number(item.price)) + '</strong></div>';
+    });
+    html += "</div>";
+
+    if (purchase.totalAmount != null) {
+      html += '<div style="display:flex;justify-content:space-between;padding:14px 0;font-weight:600">' +
+        '<span>Total</span><span>' + formatRand(Number(purchase.totalAmount)) + '</span></div>';
+    }
+
+    html += '<button class="btn btn-primary btn-block" data-action="buy-again" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:12px" ' + (this.buyAgainBusy || !items.length ? "disabled" : "") + '>' +
+      (this.buyAgainBusy ? "Adding to your list…" : "Buy again — add all items to my shopping list") + '</button>';
+
+    html += "</div>";
+    return html;
+  },
+
+  /**
+   * REG-006: adds every item from a past purchase back into the
+   * user's currently-selected shopping list, reusing the exact same
+   * single-item POST endpoint the manual "add item" form already
+   * uses -- no new bulk-add endpoint built for this.
+   */
+  async buyAgain(purchaseId) {
+    if (this.buyAgainBusy) return;
+    const purchase = this.purchaseDetail && this.purchaseDetail.id === purchaseId ? this.purchaseDetail : null;
+    if (!purchase || !purchase.items || !purchase.items.length) return;
+
+    if (!this.shoppingLists || !this.shoppingLists.length) {
+      try {
+        const payload = await apiGet("/me/shopping-lists");
+        this.shoppingLists = Array.isArray(payload) ? payload : (payload && payload.data) || [];
+      } catch (error) {
+        this.purchaseDetailError = this.userFacingError(error);
+        this.renderOverlay();
+        return;
+      }
+    }
+
+    if (!this.shoppingLists.length) {
+      this.purchaseDetailError = "You don't have a shopping list yet. Create one first, then come back to add these items.";
+      this.renderOverlay();
+      return;
+    }
+
+    const targetListId = this.shoppingLists.some((list) => list.id === this.selectedShoppingListId)
+      ? this.selectedShoppingListId
+      : this.shoppingLists[0].id;
+
+    this.buyAgainBusy = true;
+    this.purchaseDetailError = "";
+    this.renderOverlay();
+
+    let addedCount = 0;
+    try {
+      for (const item of purchase.items) {
+        await apiPost("/me/shopping-lists/" + encodeURIComponent(targetListId) + "/items", {
+          description: item.name,
+          quantity: 1,
+        });
+        addedCount += 1;
+      }
+      this.buyAgainBusy = false;
+      this.purchaseDetailMessage = addedCount + " item" + (addedCount === 1 ? "" : "s") + " added to your shopping list.";
+      this.renderOverlay();
+    } catch (error) {
+      this.buyAgainBusy = false;
+      this.purchaseDetailError = addedCount > 0
+        ? addedCount + " item" + (addedCount === 1 ? "" : "s") + " were added before this failed: " + this.userFacingError(error)
+        : this.userFacingError(error);
+      this.renderOverlay();
+    }
   },
 
   async openInsights() {
@@ -3801,7 +3989,10 @@ const App = {
     this.overlay = "receiptScan";
     this.receiptScanBusy = false;
     this.receiptScanError = "";
-    this.receiptScanResult = null;
+    this.receiptReview = null;
+    this.receiptConfirmBusy = false;
+    this.receiptConfirmError = "";
+    this.receiptSavedMessage = "";
     this.renderOverlay();
   },
 
@@ -3816,11 +4007,16 @@ const App = {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        // reader.result is a data URL ("data:image/png;base64,...."]) --
-        // only the part after the comma is the actual base64 payload.
         const base64 = String(reader.result || "").split(",")[1] || "";
         const result = await apiPost("/me/receipts/scan", { imageBase64: base64 });
-        this.receiptScanResult = result;
+        // REG-005: scanning only ever returns data for review now --
+        // nothing has been saved yet. receiptReview is the editable
+        // working copy the user corrects before confirming.
+        this.receiptReview = {
+          retailerName: result.retailerName || null,
+          total: result.total != null ? result.total : null,
+          items: Array.isArray(result.items) ? result.items.map((item) => ({ ...item })) : [],
+        };
       } catch (error) {
         this.receiptScanError = this.userFacingError(error);
       } finally {
@@ -3831,6 +4027,123 @@ const App = {
     reader.onerror = () => {
       this.receiptScanBusy = false;
       this.receiptScanError = "Could not read that image. Please try again.";
+      this.renderOverlay();
+    };
+    reader.readAsDataURL(file);
+  },
+
+  /**
+   * REG-005: edits made in the review screen (name/price changes)
+   * update the in-memory working copy directly -- nothing is
+   * persisted until confirmReceiptSave() is explicitly called.
+   */
+  updateReceiptReviewItem(index, field, value) {
+    if (!this.receiptReview || !this.receiptReview.items[index]) return;
+    if (field === "price") {
+      this.receiptReview.items[index].price = Number(value);
+    } else {
+      this.receiptReview.items[index].name = value;
+    }
+  },
+
+  removeReceiptReviewItem(index) {
+    if (!this.receiptReview) return;
+    this.receiptReview.items.splice(index, 1);
+    this.renderOverlay();
+  },
+
+  addReceiptReviewItem() {
+    if (!this.receiptReview) return;
+    this.receiptReview.items.push({ name: "", price: 0, matchedPromotionName: null, paidPromoPrice: null });
+    this.renderOverlay();
+  },
+
+  /**
+   * REG-005: this is the actual save -- the one and only place a
+   * scanned/reviewed receipt is persisted, using the exact same
+   * POST /me/purchases endpoint plain manual entry already uses.
+   * Whatever is in receiptReview.items at this point (edited,
+   * added to, or trimmed by the user) is exactly what gets saved --
+   * the receipt's own total is sent separately as totalAmount, never
+   * as a line item itself.
+   */
+  async confirmReceiptSave() {
+    if (this.receiptConfirmBusy || !this.receiptReview) return;
+
+    const items = this.receiptReview.items
+      .map((item) => ({ ...item, name: String(item.name || "").trim() }))
+      .filter((item) => item.name && Number.isFinite(Number(item.price)) && Number(item.price) >= 0);
+
+    if (!items.length) {
+      this.receiptConfirmError = "Please add at least one valid item before saving.";
+      this.renderOverlay();
+      return;
+    }
+
+    this.receiptConfirmBusy = true;
+    this.receiptConfirmError = "";
+    this.renderOverlay();
+
+    try {
+      await apiPost("/me/purchases", {
+        retailerName: this.receiptReview.retailerName,
+        ...(this.receiptReview.total != null ? { totalAmount: this.receiptReview.total } : {}),
+        source: "RECEIPT_SCAN",
+        items: items.map((item) => ({
+          name: item.name,
+          price: Number(item.price),
+          matchedPromotionName: item.matchedPromotionName ?? null,
+          paidPromoPrice: item.paidPromoPrice ?? null,
+        })),
+      });
+      this.receiptConfirmBusy = false;
+      this.receiptReview = null;
+      this.receiptSavedMessage = items.length + " item" + (items.length === 1 ? "" : "s") + " saved to your purchase history.";
+      this.renderOverlay();
+    } catch (error) {
+      this.receiptConfirmBusy = false;
+      this.receiptConfirmError = this.userFacingError(error);
+      this.renderOverlay();
+    }
+  },
+
+
+  /**
+   * REG-004: reads the selected voucher photo, sends it for OCR +
+   * field extraction, and pre-fills the add-voucher form with
+   * whatever was found -- never saves anything itself. Follows the
+   * exact same pattern as handleReceiptFileSelected above, reusing
+   * the same base64-conversion approach rather than a second one.
+   */
+  handleVoucherFileSelected(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    this.voucherExtractBusy = true;
+    this.voucherExtractError = "";
+    this.voucherExtractMessage = "";
+    this.renderOverlay();
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const base64 = String(reader.result || "").split(",")[1] || "";
+        const fields = await apiPost("/me/wallet-vouchers/extract", { imageBase64: base64 });
+        this.voucherExtracted = fields;
+        const foundAnything = fields && (fields.retailerName || fields.value != null || fields.voucherNumber || fields.expiresAt);
+        this.voucherExtractMessage = foundAnything
+          ? "We've pre-filled what we could read below -- please check it's correct before saving."
+          : "We couldn't read much from that photo. Please fill in the details manually below.";
+      } catch (error) {
+        this.voucherExtractError = this.userFacingError(error);
+      } finally {
+        this.voucherExtractBusy = false;
+        this.renderOverlay();
+      }
+    };
+    reader.onerror = () => {
+      this.voucherExtractBusy = false;
+      this.voucherExtractError = "Could not read that image. Please try again, or enter the details manually.";
       this.renderOverlay();
     };
     reader.readAsDataURL(file);
@@ -4430,12 +4743,18 @@ const App = {
     this.voucherFormOpen = true;
     this.voucherError = "";
     this.voucherFormBarcode = "";
+    this.voucherExtracted = null;
+    this.voucherExtractError = "";
+    this.voucherExtractMessage = "";
     this.renderOverlay();
   },
 
   cancelAddVoucherForm() {
     this.voucherFormOpen = false;
     this.voucherError = "";
+    this.voucherExtracted = null;
+    this.voucherExtractError = "";
+    this.voucherExtractMessage = "";
     this.renderOverlay();
   },
 
@@ -4444,7 +4763,9 @@ const App = {
 
     const retailerName = String(document.getElementById("voucher-retailer")?.value || "").trim();
     const barcode = String(this.voucherFormBarcode || document.getElementById("voucher-barcode")?.value || "").trim();
+    const voucherNumber = String(document.getElementById("voucher-number")?.value || "").trim();
     const valueRaw = document.getElementById("voucher-value")?.value;
+    const validFromRaw = String(document.getElementById("voucher-valid-from")?.value || "").trim();
     const expiryRaw = String(document.getElementById("voucher-expiry")?.value || "").trim();
 
     const value = Number(valueRaw);
@@ -4470,11 +4791,14 @@ const App = {
         retailerName,
         barcode,
         value,
+        ...(voucherNumber ? { voucherNumber } : {}),
+        ...(validFromRaw ? { validFrom: new Date(validFromRaw + "T00:00:00").toISOString() } : {}),
         ...(expiryRaw ? { expiresAt: new Date(expiryRaw + "T23:59:59").toISOString() } : {}),
       });
       this.voucherBusy = false;
       this.voucherFormOpen = false;
       this.voucherFormBarcode = "";
+      this.voucherExtracted = null;
       this.renderOverlay();
       await this.loadVouchers();
     } catch (error) {
@@ -4574,15 +4898,32 @@ const App = {
   },
 
   renderAddVoucherForm() {
+    // REG-004: extracted fields (if a photo scan has run) pre-fill
+    // the form below -- this is never auto-saved, the user reviews
+    // and can correct every field before "Save voucher" actually
+    // persists anything.
+    const extracted = this.voucherExtracted || {};
+
     let html = "";
     html += '<p style="font-size:13px;color:var(--grey-muted);margin:0 0 18px">Add a voucher you\'ve received from a retailer, so you can find and present it again when you\'re ready to redeem it.</p>';
 
     if (this.voucherError) {
       html += '<div class="auth-error" style="margin-bottom:14px">' + this.escapeHtml(this.voucherError) + '</div>';
     }
+    if (this.voucherExtractError) {
+      html += '<div class="auth-error" style="margin-bottom:14px">' + this.escapeHtml(this.voucherExtractError) + '</div>';
+    }
+    if (this.voucherExtractMessage) {
+      html += '<div class="auth-error" style="margin-bottom:14px;background:var(--green-tint);color:var(--green-deep)">' + this.escapeHtml(this.voucherExtractMessage) + '</div>';
+    }
+
+    html += '<label class="capture-btn" for="voucher-scan-file-input">' + ICONS.camera + '<span>' +
+      (this.voucherExtractBusy ? "Reading voucher…" : "Scan voucher photo") + '</span></label>';
+    html += '<input type="file" id="voucher-scan-file-input" accept="image/*" capture="environment" style="display:none" ' + (this.voucherExtractBusy ? "disabled" : "") + '>';
+    html += '<p style="font-size:11px;color:var(--grey-muted);margin:8px 0 18px">We\'ll try to read the retailer, value, dates and reference number from the photo -- review everything below before saving.</p>';
 
     html += '<label class="field-label" for="voucher-retailer">Retailer</label>';
-    html += '<input id="voucher-retailer" class="text-input" type="text" placeholder="e.g. Woolworths" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    html += '<input id="voucher-retailer" class="text-input" type="text" placeholder="e.g. Woolworths" value="' + this.escapeAttr(extracted.retailerName || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
 
     html += '<label class="field-label" for="voucher-barcode" style="margin-top:14px">Voucher barcode</label>';
     html += '<input id="voucher-barcode" class="text-input" type="text" placeholder="Scan or type the barcode" value="' + this.escapeAttr(this.voucherFormBarcode || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
@@ -4600,11 +4941,17 @@ const App = {
       html += '<div style="font-size:11px;color:var(--grey-muted);margin-top:6px">' + this.escapeHtml(this.barcodeScanUnsupportedMessage) + '</div>';
     }
 
+    html += '<label class="field-label" for="voucher-number" style="margin-top:14px">Voucher number / reference (optional)</label>';
+    html += '<input id="voucher-number" class="text-input" type="text" placeholder="e.g. REF-98765" value="' + this.escapeAttr(extracted.voucherNumber || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
+
     html += '<label class="field-label" for="voucher-value" style="margin-top:14px">Value (R)</label>';
-    html += '<input id="voucher-value" class="text-input" type="number" min="0.01" step="0.01" placeholder="0.00" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    html += '<input id="voucher-value" class="text-input" type="number" min="0.01" step="0.01" placeholder="0.00" value="' + this.escapeAttr(extracted.value != null ? extracted.value : "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
+
+    html += '<label class="field-label" for="voucher-valid-from" style="margin-top:14px">Valid from (optional)</label>';
+    html += '<input id="voucher-valid-from" class="text-input" type="date" value="' + this.escapeAttr(extracted.validFrom || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
 
     html += '<label class="field-label" for="voucher-expiry" style="margin-top:14px">Expiry date (optional)</label>';
-    html += '<input id="voucher-expiry" class="text-input" type="date" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    html += '<input id="voucher-expiry" class="text-input" type="date" value="' + this.escapeAttr(extracted.expiresAt || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
 
     html += '<button class="btn btn-primary btn-block" data-action="add-voucher-submit" style="margin-top:18px" ' + (this.voucherBusy ? "disabled" : "") + '>' +
       (this.voucherBusy ? "Saving…" : "Save voucher") + '</button>';
@@ -5037,6 +5384,44 @@ const App = {
 
     }
 
+    const voucherFileInput =
+      document.getElementById(
+        "voucher-scan-file-input"
+      );
+
+    if (voucherFileInput) {
+
+      voucherFileInput.addEventListener(
+        "change",
+        (e) =>
+          this.handleVoucherFileSelected(e)
+      );
+
+    }
+
+    const overlayRootForInput =
+      document.getElementById(
+        "overlay-root"
+      );
+
+    if (overlayRootForInput) {
+
+      overlayRootForInput.oninput =
+        (e) => {
+          const el =
+            e.target.closest(
+              "[data-receipt-review-field]"
+            );
+          if (!el) return;
+          this.updateReceiptReviewItem(
+            Number(el.dataset.index),
+            el.dataset.receiptReviewField,
+            el.value
+          );
+        };
+
+    }
+
     this.root_click_bind(
       "overlay-root"
     );
@@ -5298,8 +5683,28 @@ const App = {
         this.openReceiptScan();
         break;
 
+      case "remove-receipt-review-item":
+        this.removeReceiptReviewItem(Number(data.index));
+        break;
+
+      case "add-receipt-review-item":
+        this.addReceiptReviewItem();
+        break;
+
+      case "confirm-receipt-save":
+        this.confirmReceiptSave();
+        break;
+
       case "open-purchases":
         this.openPurchases();
+        break;
+
+      case "open-purchase-detail":
+        this.openPurchaseDetail(data.id);
+        break;
+
+      case "buy-again":
+        this.buyAgain(data.id);
         break;
 
       case "start-barcode-scan":
