@@ -943,6 +943,20 @@ const App = {
     return this.data.cards.some((c) => c.lastSyncedAt);
   },
 
+  /**
+   * Prefers this.vouchers (set fresh whenever the Vouchers screen
+   * itself has been opened via loadVouchers()) over
+   * this.data.vouchers (populated once at app bootstrap) -- so a
+   * voucher added/removed while browsing is reflected immediately,
+   * without needing a full app reload, while still having real data
+   * available on Home before the user ever visits Vouchers at all.
+   */
+  getWalletVouchersForDashboard() {
+    if (Array.isArray(this.vouchers)) return this.vouchers;
+    if (this.data && Array.isArray(this.data.vouchers)) return this.data.vouchers;
+    return [];
+  },
+
   totals() {
 
     const cards =
@@ -1256,10 +1270,17 @@ const App = {
       (pendingSync ? "—" : formatRand(t.cashback)) +
       '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Cashback") + '</div></div>';
 
+    // REG-001 follow-up: manually-captured wallet vouchers are never
+    // "pending sync" -- combining them with the sync-derived voucher
+    // count, matching the same logic in the Insights overlay.
+    const activeWalletVoucherCount = this.getWalletVouchersForDashboard().filter((v) => v.effectiveStatus === "ACTIVE").length;
+    const combinedDashboardVoucherCount = (pendingSync ? 0 : t.vouchers) + activeWalletVoucherCount;
+    const dashboardVouchersPending = pendingSync && activeWalletVoucherCount === 0;
+
     html +=
       '<div class="hero-stat"><div class="num">' +
-      (pendingSync ? "—" : t.vouchers) +
-      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Vouchers") + '</div></div>';
+      (dashboardVouchersPending ? "Pending sync" : combinedDashboardVoucherCount) +
+      '</div><div class="lbl">Vouchers</div></div>';
 
     html += "</div></div>";
 
@@ -1323,6 +1344,10 @@ const App = {
     html +=
       '<button class="btn btn-secondary" data-action="open-vouchers">' +
       "My vouchers</button>";
+
+    html +=
+      '<button class="btn btn-secondary" data-action="open-purchases">' +
+      "Purchase history</button>";
 
     html += "</div>";
 
@@ -3669,11 +3694,23 @@ const App = {
       insights.totalLoyaltyAccounts > 0 &&
       !insights.retailers.some((r) => r.lastSyncedAt);
 
+    // Manually-captured wallet vouchers (see wallet-vouchers.js) are
+    // never "pending sync" -- they're real, user-entered data with no
+    // retailer sync dependency at all. The Vouchers stat combines
+    // both sources: sync-derived vouchers from loyalty accounts
+    // (0 while genuinely pending) plus active wallet vouchers
+    // (always countable). Only shows "Pending sync" itself when
+    // BOTH sources are empty.
+    const activeWalletVoucherCount = (this.vouchers || []).filter((v) => v.effectiveStatus === "ACTIVE").length;
+    const syncedVoucherCount = insightsPendingSync ? 0 : insights.totalAvailableVouchers;
+    const combinedVoucherCount = syncedVoucherCount + activeWalletVoucherCount;
+    const vouchersPending = insightsPendingSync && activeWalletVoucherCount === 0;
+
     html += '<div class="hero-stats" style="margin-bottom:18px">';
     html += '<div class="hero-stat"><div class="num">' + insights.totalLoyaltyAccounts + '</div><div class="lbl">Loyalty accounts</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalPoints.toLocaleString("en-ZA")) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Points") + '</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalAvailableRewards) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Rewards") + '</div></div>';
-    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "—" : insights.totalAvailableVouchers) + '</div><div class="lbl">' + (insightsPendingSync ? "Pending sync" : "Vouchers") + '</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "Pending sync" : insights.totalPoints.toLocaleString("en-ZA")) + '</div><div class="lbl">Points</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (insightsPendingSync ? "Pending sync" : insights.totalAvailableRewards) + '</div><div class="lbl">Rewards</div></div>';
+    html += '<div class="hero-stat"><div class="num">' + (vouchersPending ? "Pending sync" : combinedVoucherCount) + '</div><div class="lbl">Vouchers</div></div>';
     html += "</div>";
 
     if (insights.totalAvailableRewardValue > 0 || insights.totalAvailableVoucherValue > 0) {
@@ -3846,15 +3883,49 @@ const App = {
     this.purchaseDetailError = "";
     this.purchaseDetailMessage = "";
     this.purchaseDetail = null;
+    this.buyAgainCheckedItems = null;
+    this.buyAgainTargetListId = null;
     this.renderOverlay();
     try {
-      this.purchaseDetail = await apiGet("/me/purchases/" + encodeURIComponent(purchaseId));
+      const [purchase] = await Promise.all([
+        apiGet("/me/purchases/" + encodeURIComponent(purchaseId)),
+        // Best-effort: the shopping-list picker just falls back to
+        // "you have no lists yet" if this fails, rather than blocking
+        // the whole detail view from loading.
+        (async () => {
+          if (this.shoppingLists && this.shoppingLists.length) return;
+          try {
+            const payload = await apiGet("/me/shopping-lists");
+            this.shoppingLists = Array.isArray(payload) ? payload : (payload && payload.data) || [];
+          } catch (error) {
+            // leave whatever was already loaded, if anything
+          }
+        })(),
+      ]);
+      this.purchaseDetail = purchase;
+      // Issue 2 (regression testing): every item defaults to checked
+      // -- "buy again, everything" stays the one-tap common case --
+      // but the user can uncheck items they don't want re-added.
+      this.buyAgainCheckedItems = (purchase.items || []).map(() => true);
+      this.buyAgainTargetListId = (this.shoppingLists || []).some((l) => l.id === this.selectedShoppingListId)
+        ? this.selectedShoppingListId
+        : (this.shoppingLists && this.shoppingLists[0] && this.shoppingLists[0].id) || null;
     } catch (error) {
       this.purchaseDetailError = this.userFacingError(error);
     } finally {
       this.purchaseDetailBusy = false;
       this.renderOverlay();
     }
+  },
+
+  toggleBuyAgainItem(index) {
+    if (!this.buyAgainCheckedItems) return;
+    this.buyAgainCheckedItems[index] = !this.buyAgainCheckedItems[index];
+    this.renderOverlay();
+  },
+
+  setBuyAgainTargetList(listId) {
+    this.buyAgainTargetListId = listId;
   },
 
   renderPurchaseDetailOverlay() {
@@ -3892,11 +3963,15 @@ const App = {
     html += '<p style="font-size:12px;color:var(--grey-muted);margin:6px 0 16px">' + date + '</p>';
 
     const items = purchase.items || [];
+    const checked = this.buyAgainCheckedItems || items.map(() => true);
     html += '<div class="bn-detail-list">';
-    items.forEach((item) => {
+    items.forEach((item, index) => {
       html +=
-        '<div class="bn-detail-row" style="padding:10px 0;border-bottom:1px solid var(--line)">' +
+        '<div class="bn-detail-row" style="padding:10px 0;border-bottom:1px solid var(--line);gap:8px">' +
+        '<label style="display:flex;align-items:center;gap:8px;flex:1;cursor:pointer">' +
+        '<input type="checkbox" data-action="toggle-buy-again-item" data-index="' + index + '" ' + (checked[index] ? "checked" : "") + ' ' + (this.buyAgainBusy ? "disabled" : "") + '>' +
         '<span>' + this.escapeHtml(item.name) + '</span>' +
+        '</label>' +
         '<strong>' + formatRand(Number(item.price)) + '</strong></div>';
     });
     html += "</div>";
@@ -3906,8 +3981,24 @@ const App = {
         '<span>Total</span><span>' + formatRand(Number(purchase.totalAmount)) + '</span></div>';
     }
 
-    html += '<button class="btn btn-primary btn-block" data-action="buy-again" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:12px" ' + (this.buyAgainBusy || !items.length ? "disabled" : "") + '>' +
-      (this.buyAgainBusy ? "Adding to your list…" : "Buy again — add all items to my shopping list") + '</button>';
+    const checkedCount = checked.filter(Boolean).length;
+    const lists = this.shoppingLists || [];
+
+    if (items.length > 0) {
+      html += '<label class="field-label" for="buy-again-list-select">Add to</label>';
+      if (lists.length) {
+        html += '<select id="buy-again-list-select" class="text-input" ' + (this.buyAgainBusy ? "disabled" : "") + '>';
+        lists.forEach((list) => {
+          html += '<option value="' + this.escapeAttr(list.id) + '" ' + (this.buyAgainTargetListId === list.id ? "selected" : "") + '>' + this.escapeHtml(list.name || "Shopping list") + '</option>';
+        });
+        html += '</select>';
+      } else {
+        html += '<p style="font-size:12px;color:var(--grey-muted)">You don\'t have a shopping list yet -- create one first, then come back to add these items.</p>';
+      }
+    }
+
+    html += '<button class="btn btn-primary btn-block" data-action="buy-again" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:12px" ' + (this.buyAgainBusy || !checkedCount || !lists.length ? "disabled" : "") + '>' +
+      (this.buyAgainBusy ? "Adding to your list…" : "Buy again — add " + checkedCount + " item" + (checkedCount === 1 ? "" : "s") + " to my list") + '</button>';
 
     html += "</div>";
     return html;
@@ -3924,26 +4015,27 @@ const App = {
     const purchase = this.purchaseDetail && this.purchaseDetail.id === purchaseId ? this.purchaseDetail : null;
     if (!purchase || !purchase.items || !purchase.items.length) return;
 
-    if (!this.shoppingLists || !this.shoppingLists.length) {
-      try {
-        const payload = await apiGet("/me/shopping-lists");
-        this.shoppingLists = Array.isArray(payload) ? payload : (payload && payload.data) || [];
-      } catch (error) {
-        this.purchaseDetailError = this.userFacingError(error);
-        this.renderOverlay();
-        return;
-      }
-    }
+    // Issue 2 (regression testing): respects the user's own checkbox
+    // selections and their chosen target list, rather than always
+    // adding everything to whichever list happened to be selected
+    // elsewhere in the app.
+    const selectedListElement = document.getElementById("buy-again-list-select");
+    const targetListId = (selectedListElement && selectedListElement.value) || this.buyAgainTargetListId;
 
-    if (!this.shoppingLists.length) {
+    if (!targetListId) {
       this.purchaseDetailError = "You don't have a shopping list yet. Create one first, then come back to add these items.";
       this.renderOverlay();
       return;
     }
 
-    const targetListId = this.shoppingLists.some((list) => list.id === this.selectedShoppingListId)
-      ? this.selectedShoppingListId
-      : this.shoppingLists[0].id;
+    const checked = this.buyAgainCheckedItems || purchase.items.map(() => true);
+    const itemsToAdd = purchase.items.filter((_, index) => checked[index]);
+
+    if (!itemsToAdd.length) {
+      this.purchaseDetailError = "Select at least one item to add.";
+      this.renderOverlay();
+      return;
+    }
 
     this.buyAgainBusy = true;
     this.purchaseDetailError = "";
@@ -3951,7 +4043,7 @@ const App = {
 
     let addedCount = 0;
     try {
-      for (const item of purchase.items) {
+      for (const item of itemsToAdd) {
         await apiPost("/me/shopping-lists/" + encodeURIComponent(targetListId) + "/items", {
           description: item.name,
           quantity: 1,
@@ -3976,7 +4068,20 @@ const App = {
     this.insightsError = "";
     this.renderOverlay();
     try {
-      this.insights = await apiGet("/me/insights");
+      const [insights] = await Promise.all([
+        apiGet("/me/insights"),
+        // Best-effort: if this fails, the Vouchers stat just falls
+        // back to sync-derived data only, rather than blocking
+        // Insights from loading at all.
+        (async () => {
+          try {
+            this.vouchers = await apiGet("/me/wallet-vouchers");
+          } catch (error) {
+            // leave whatever vouchers were already loaded, if any
+          }
+        })(),
+      ]);
+      this.insights = insights;
     } catch (error) {
       this.insightsError = this.userFacingError(error);
     } finally {
@@ -4739,6 +4844,21 @@ const App = {
     this.renderOverlay();
   },
 
+  /**
+   * Issue 3: switches between the retailer dropdown and the "Other"
+   * free-text fallback. The hidden #voucher-retailer field (read by
+   * addVoucher()) is kept in sync directly here, rather than adding a
+   * second read path for the dropdown vs. the text input.
+   */
+  handleVoucherRetailerSelectChange(value) {
+    this.voucherRetailerOther = value === "__other__";
+    if (!this.voucherRetailerOther) {
+      this.voucherExtracted = this.voucherExtracted || {};
+      this.voucherExtracted.retailerName = value;
+    }
+    this.renderOverlay();
+  },
+
   showAddVoucherForm() {
     this.voucherFormOpen = true;
     this.voucherError = "";
@@ -4746,6 +4866,7 @@ const App = {
     this.voucherExtracted = null;
     this.voucherExtractError = "";
     this.voucherExtractMessage = "";
+    this.voucherRetailerOther = null;
     this.renderOverlay();
   },
 
@@ -4830,6 +4951,33 @@ const App = {
       // than showing a stale "Redeem" button for a voucher that's now
       // actually redeemed.
       this.renderOverlay();
+    } catch (error) {
+      this.voucherBusy = false;
+      this.voucherError = this.userFacingError(error);
+      this.renderOverlay();
+    }
+  },
+
+  /**
+   * A real, permanent delete -- for a voucher captured incorrectly or
+   * one that's expired and the user wants gone from their wallet.
+   * Confirmed before acting, since this can't be undone the way
+   * redeeming (a status change) can be reasoned about.
+   */
+  async deleteVoucher(voucherId) {
+    if (this.voucherBusy) return;
+    if (!confirm("Delete this voucher? This can't be undone.")) return;
+
+    this.voucherBusy = true;
+    this.voucherError = "";
+    this.renderOverlay();
+
+    try {
+      await apiDeleteLocal("/me/wallet-vouchers/" + encodeURIComponent(voucherId));
+      this.voucherBusy = false;
+      this.overlay = "vouchers";
+      this.renderOverlay();
+      await this.loadVouchers();
     } catch (error) {
       this.voucherBusy = false;
       this.voucherError = this.userFacingError(error);
@@ -4923,7 +5071,37 @@ const App = {
     html += '<p style="font-size:11px;color:var(--grey-muted);margin:8px 0 18px">We\'ll try to read the retailer, value, dates and reference number from the photo -- review everything below before saving.</p>';
 
     html += '<label class="field-label" for="voucher-retailer">Retailer</label>';
-    html += '<input id="voucher-retailer" class="text-input" type="text" placeholder="e.g. Woolworths" value="' + this.escapeAttr(extracted.retailerName || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    // Issue 3 (user regression testing): a free-text retailer field
+    // made users type exactly what OCR happened to find, or guess at
+    // spelling if it found nothing -- a dropdown of the same real
+    // retailer catalogue used everywhere else in the app (RETAILERS,
+    // from /catalog/loyalty-programmes) is both easier to use and
+    // keeps voucher retailer names consistent with the rest of the
+    // app. "Other" is kept as an escape hatch, since a voucher can
+    // genuinely come from a retailer outside this catalogue.
+    const knownRetailerNames = [...new Set((typeof RETAILERS !== "undefined" ? RETAILERS : []).map((r) => r.name))];
+    const extractedRetailer = extracted.retailerName || "";
+    const matchedKnownRetailer = knownRetailerNames.find((n) => n.toLowerCase() === extractedRetailer.toLowerCase());
+    const showOtherInput = this.voucherRetailerOther != null
+      ? this.voucherRetailerOther
+      : Boolean(extractedRetailer && !matchedKnownRetailer);
+
+    html += '<select id="voucher-retailer-select" class="text-input" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    html += '<option value="">Select a retailer…</option>';
+    knownRetailerNames.forEach((name) => {
+      html += '<option value="' + this.escapeAttr(name) + '" ' + (matchedKnownRetailer === name && !showOtherInput ? "selected" : "") + '>' + this.escapeHtml(name) + '</option>';
+    });
+    html += '<option value="__other__" ' + (showOtherInput ? "selected" : "") + '>Other (not listed)</option>';
+    html += '</select>';
+
+    if (showOtherInput) {
+      html += '<input id="voucher-retailer" class="text-input" type="text" placeholder="Enter the retailer name" value="' + this.escapeAttr(matchedKnownRetailer ? "" : extractedRetailer) + '" style="margin-top:8px" ' + (this.voucherBusy ? "disabled" : "") + '>';
+    } else {
+      // A hidden field keeps addVoucher()'s existing
+      // getElementById("voucher-retailer") read working unchanged --
+      // its value is kept in sync with the dropdown's own selection.
+      html += '<input id="voucher-retailer" type="hidden" value="' + this.escapeAttr(matchedKnownRetailer || "") + '">';
+    }
 
     html += '<label class="field-label" for="voucher-barcode" style="margin-top:14px">Voucher barcode</label>';
     html += '<input id="voucher-barcode" class="text-input" type="text" placeholder="Scan or type the barcode" value="' + this.escapeAttr(this.voucherFormBarcode || "") + '" ' + (this.voucherBusy ? "disabled" : "") + '>';
@@ -5007,6 +5185,9 @@ const App = {
       html += '<button class="btn btn-primary btn-block" data-action="redeem-voucher" data-id="' + this.escapeAttr(voucher.id) + '" ' + (this.voucherBusy ? "disabled" : "") + '>' +
         (this.voucherBusy ? "Marking as redeemed…" : "Mark as redeemed") + '</button>';
     }
+
+    html += '<button class="btn btn-secondary btn-block" data-action="delete-voucher" data-id="' + this.escapeAttr(voucher.id) + '" style="margin-top:10px" ' + (this.voucherBusy ? "disabled" : "") + '>' +
+      (this.voucherBusy ? "Deleting…" : "Delete this voucher") + '</button>';
 
     html += "</div>";
     return html;
@@ -5399,6 +5580,21 @@ const App = {
 
     }
 
+    const voucherRetailerSelect =
+      document.getElementById(
+        "voucher-retailer-select"
+      );
+
+    if (voucherRetailerSelect) {
+
+      voucherRetailerSelect.addEventListener(
+        "change",
+        (e) =>
+          this.handleVoucherRetailerSelectChange(e.target.value)
+      );
+
+    }
+
     const overlayRootForInput =
       document.getElementById(
         "overlay-root"
@@ -5408,16 +5604,22 @@ const App = {
 
       overlayRootForInput.oninput =
         (e) => {
-          const el =
+          const reviewField =
             e.target.closest(
               "[data-receipt-review-field]"
             );
-          if (!el) return;
-          this.updateReceiptReviewItem(
-            Number(el.dataset.index),
-            el.dataset.receiptReviewField,
-            el.value
-          );
+          if (reviewField) {
+            this.updateReceiptReviewItem(
+              Number(reviewField.dataset.index),
+              reviewField.dataset.receiptReviewField,
+              reviewField.value
+            );
+            return;
+          }
+
+          if (e.target.id === "buy-again-list-select") {
+            this.setBuyAgainTargetList(e.target.value);
+          }
         };
 
     }
@@ -5654,6 +5856,10 @@ const App = {
         this.redeemVoucher(data.id);
         break;
 
+      case "delete-voucher":
+        this.deleteVoucher(data.id);
+        break;
+
       case "open-voucher-detail":
         this.openVoucherDetail(data.id);
         break;
@@ -5705,6 +5911,10 @@ const App = {
 
       case "buy-again":
         this.buyAgain(data.id);
+        break;
+
+      case "toggle-buy-again-item":
+        this.toggleBuyAgainItem(Number(data.index));
         break;
 
       case "start-barcode-scan":

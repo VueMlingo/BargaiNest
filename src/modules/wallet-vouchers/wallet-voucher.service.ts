@@ -138,3 +138,28 @@ export async function redeemWalletVoucher(
     data: { status: "REDEEMED", redeemedAt: new Date() },
   });
 }
+
+/**
+ * Deletes a voucher outright -- for a voucher captured incorrectly
+ * (wrong barcode, wrong retailer, duplicate scan) or one that's
+ * simply expired and the user wants gone from their wallet.
+ * Deliberately allows deleting a voucher in ANY status (active,
+ * redeemed, or expired) -- there's no reason to restrict this the way
+ * redemption itself is restricted, since deleting doesn't claim any
+ * value the way redeeming does.
+ */
+export async function deleteWalletVoucher(
+  prisma: PrismaClient,
+  userId: string,
+  voucherId: string,
+): Promise<void> {
+  const voucher = await prisma.walletVoucher.findFirst({
+    where: { id: voucherId, userId },
+  });
+
+  if (!voucher) {
+    throw new Error("WALLET_VOUCHER_NOT_FOUND");
+  }
+
+  await prisma.walletVoucher.delete({ where: { id: voucherId } });
+}

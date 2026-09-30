@@ -52,14 +52,35 @@ function countAvailable(items: { status: string; value: number | null }[]): {
   };
 }
 
+/**
+ * REG-007: Insights must only reflect what's actually in the user's
+ * Wallet -- an account can exist (e.g. the user registered interest
+ * in a loyalty programme) without the user ever having captured an
+ * actual card for it. The Wallet frontend already filters accounts
+ * this way (pilot/js/state.js's normaliseCloudAccounts: an account
+ * only becomes a visible card if it has at least one card with
+ * status ACTIVE, defaulting a missing status to ACTIVE). Insights was
+ * built as a pure aggregation over the raw accounts array with no
+ * equivalent filter, so an account with zero actual cards -- entirely
+ * invisible in Wallet -- still counted here, showing up as an "extra"
+ * retailer entry the user never knowingly captured. This mirrors that
+ * same filter exactly, so both screens describe the same set of
+ * loyalty relationships.
+ */
+function hasAtLeastOneActiveCard(account: LoyaltyConsumerAccount): boolean {
+  return account.cards.some((card) => (card.status || "ACTIVE").toUpperCase() === "ACTIVE");
+}
+
 export function buildLoyaltyInsights(accounts: LoyaltyConsumerAccount[]): LoyaltyInsights {
+  const walletAccounts = accounts.filter(hasAtLeastOneActiveCard);
+
   let totalPoints = 0;
   let totalAvailableRewards = 0;
   let totalAvailableRewardValue = 0;
   let totalAvailableVouchers = 0;
   let totalAvailableVoucherValue = 0;
 
-  const retailers: RetailerInsight[] = accounts.map((account) => {
+  const retailers: RetailerInsight[] = walletAccounts.map((account) => {
     const points = account.currentState?.balance ?? 0;
     const rewards = countAvailable(account.currentState?.rewards ?? []);
     const vouchers = countAvailable(account.currentState?.vouchers ?? []);
@@ -81,7 +102,7 @@ export function buildLoyaltyInsights(accounts: LoyaltyConsumerAccount[]): Loyalt
   });
 
   return {
-    totalLoyaltyAccounts: accounts.length,
+    totalLoyaltyAccounts: walletAccounts.length,
     totalPoints,
     totalAvailableRewards,
     totalAvailableRewardValue,

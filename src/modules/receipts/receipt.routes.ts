@@ -28,11 +28,21 @@ const createPurchaseSchema = z.object({
   retailerName: z.string().trim().min(1).max(191).nullable().optional(),
   totalAmount: z.number().nonnegative().nullable().optional(),
   purchasedAt: z.coerce.date().optional(),
+  /*
+   * REG-005: confirming a reviewed receipt scan and creating a
+   * purchase manually are the same underlying action now (this one
+   * endpoint), but they should still be distinguishable in history --
+   * defaults to MANUAL, preserving this endpoint's existing behaviour
+   * for callers that don't specify it.
+   */
+  source: z.enum(["RECEIPT_SCAN", "MANUAL"]).optional(),
   items: z
     .array(
       z.object({
         name: z.string().trim().min(1).max(191),
         price: z.number().nonnegative(),
+        matchedPromotionName: z.string().trim().min(1).max(191).nullable().optional(),
+        paidPromoPrice: z.boolean().nullable().optional(),
       }),
     )
     .min(1),
@@ -66,12 +76,12 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
        * this route specifically -- a real photo, base64-encoded,
        * routinely exceeds that.
        */
-      scope.post(
+      scope.post<{ Querystring: { debug?: string } }>(
         "/receipts/scan",
         { bodyLimit: 15 * 1024 * 1024 },
         async (request, reply) => {
-          const userId = getAuthenticatedUserId(request);
           const parsed = scanReceiptSchema.safeParse(request.body ?? {});
+          const debugMode = request.query.debug === "true";
 
           if (!parsed.success) {
             return reply.code(400).send({
@@ -90,8 +100,9 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
             });
           }
 
+          let rawText: string | undefined;
           try {
-            const rawText = await ocrService.recognizeText(imageBuffer);
+            rawText = await ocrService.recognizeText(imageBuffer);
             const receipt = parseReceiptText(rawText);
 
             let verification: ReturnType<typeof verifyReceiptAgainstPromotions> = {
@@ -107,9 +118,9 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
 
             if (retailerConfig && receipt.items.length > 0) {
               // Best-effort: if the live specials page can't be
-              // fetched right now, the receipt is still parsed and
-              // saved -- just without promotion verification for this
-              // scan, rather than failing the whole request.
+              // fetched right now, the receipt is still returned for
+              // review -- just without promotion verification for
+              // this scan, rather than failing the whole request.
               try {
                 const promotions = await browsePromotionsForRetailer(retailerConfig);
                 verification = verifyReceiptAgainstPromotions(receipt.items, promotions);
@@ -118,42 +129,43 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
               }
             }
 
-            const purchase = await createPurchase(api.prisma, userId, {
-              retailerName: receipt.retailerName,
-              totalAmount: receipt.total,
-              source: "RECEIPT_SCAN",
-              items: receipt.items.map((item) => {
-                const match = verification.matchedPromotions.find(
-                  (m) => m.purchasedItem === item,
-                );
-                return {
-                  name: item.name,
-                  price: item.price,
-                  matchedPromotionName: match?.matchedPromotion.name ?? null,
-                  paidPromoPrice: match?.paidPromoPrice ?? null,
-                };
-              }),
+            /*
+             * REG-005: this is the OCR + parse step only -- nothing is
+             * persisted here. Each parsed item is returned with its
+             * promotion-match info attached directly (rather than a
+             * separate parallel array the frontend would need to
+             * cross-reference), so the review screen can show and
+             * edit a single flat list. The user reviews, corrects
+             * (edit names/prices, remove wrong items, add missing
+             * ones), and only when they confirm does the frontend
+             * call POST /me/purchases below to actually save --
+             * carrying forward whatever matchedPromotionName/
+             * paidPromoPrice survived their edits.
+             */
+            const items = receipt.items.map((item) => {
+              const match = verification.matchedPromotions.find(
+                (m) => m.purchasedItem === item,
+              );
+              return {
+                name: item.name,
+                price: item.price,
+                matchedPromotionName: match?.matchedPromotion.name ?? null,
+                paidPromoPrice: match?.paidPromoPrice ?? null,
+              };
             });
 
-            // Deliberately NOT audit-logged: BRS Section 15 names four
-            // specific categories (auth, profile changes, card
-            // additions, consent changes) and AuditAction is closed
-            // to exactly those on purpose, to stop ad-hoc categories
-            // accumulating over time. Receipt/purchase events aren't
-            // one of the four, so this isn't logged under an existing
-            // category it doesn't actually belong to.
-
-            return reply.code(201).send({
-              purchase,
+            return reply.send({
               retailerName: receipt.retailerName,
-              matchedPromotions: verification.matchedPromotions,
-              unmatchedItemCount: verification.unmatchedItems.length,
+              total: receipt.total,
+              items,
+              ...(debugMode ? { debugRawOcrText: rawText } : {}),
             });
           } catch (error) {
             request.log.error(error, "receipt scan failed");
             return reply.code(500).send({
               error: "RECEIPT_SCAN_FAILED",
-              message: "Unable to process this receipt right now.",
+              message: "Unable to process this receipt right now. You can still enter the items manually.",
+              ...(debugMode ? { debugRawOcrText: rawText ?? null } : {}),
             });
           }
         },
@@ -202,8 +214,13 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
           retailerName: parsed.data.retailerName ?? null,
           totalAmount,
           ...(parsed.data.purchasedAt ? { purchasedAt: parsed.data.purchasedAt } : {}),
-          source: "MANUAL",
-          items: parsed.data.items,
+          source: parsed.data.source ?? "MANUAL",
+          items: parsed.data.items.map((item) => ({
+            name: item.name,
+            price: item.price,
+            matchedPromotionName: item.matchedPromotionName ?? null,
+            paidPromoPrice: item.paidPromoPrice ?? null,
+          })),
         });
 
         return reply.code(201).send(purchase);

@@ -322,7 +322,18 @@ async function loadPilotState() {
     throw unauth;
   }
   var accounts = await apiGet("/me/loyalty-accounts");
-  return createInitialState(me.user, Array.isArray(accounts) ? accounts : (accounts && accounts.data) || []);
+  var state = createInitialState(me.user, Array.isArray(accounts) ? accounts : (accounts && accounts.data) || []);
+  // Best-effort: manually-captured wallet vouchers need to be
+  // available on the Home dashboard immediately, not only once the
+  // user has visited the Vouchers screen -- but a failure here
+  // shouldn't block the whole app from loading.
+  try {
+    var vouchers = await apiGet("/me/wallet-vouchers");
+    state.vouchers = Array.isArray(vouchers) ? vouchers : [];
+  } catch (e) {
+    state.vouchers = [];
+  }
+  return state;
 }
 
 async function loginPilot(email, password) {

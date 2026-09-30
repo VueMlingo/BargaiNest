@@ -56,7 +56,20 @@ const NON_ITEM_KEYWORDS = new Set([
  *  that verification work, not independently of it. */
 const KNOWN_RETAILERS = ["SHOPRITE", "CHECKERS", "PICK N PAY", "WOOLWORTHS", "SPAR"];
 
-const PRICE_PATTERN = /(-?\d+[.,]\d{2})\s*$/;
+/*
+ * REG-005: optionally consumes a leading "R" (case-insensitive,
+ * with or without a following space) as PART of the match, not just
+ * the numeric price -- otherwise "Milk       R22.99" split the price
+ * off correctly but left a stray "R" stuck on the item name
+ * ("Milk       R"), and for the TOTAL line specifically, that stray
+ * "R" broke the exact "TOTAL" string comparison used to detect it,
+ * so a real total like "Total      R82.77" was silently dropped
+ * (total stayed null) instead of being captured. Both bugs shared
+ * this one root cause. R? and the following \s? are both optional,
+ * so a bare, unprefixed price ("21.99") still matches exactly as
+ * before -- this doesn't regress the already-confirmed working case.
+ */
+const PRICE_PATTERN = /R?\s?(-?\d+[.,]\d{2})\s*$/i;
 
 function parsePrice(raw: string): number {
   return Number(raw.replace(",", "."));

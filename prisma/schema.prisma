@@ -864,12 +864,19 @@ model WalletVoucher {
   /*
    * REG-008: deliberately a separate field from `barcode`. Many real
    * vouchers print both a scannable barcode AND a distinct, shorter
-   * human-readable reference/voucher number.
+   * human-readable reference/voucher number (e.g. for phone-in
+   * redemption or manual entry when a scanner isn't available) --
+   * conflating the two into one field would silently discard
+   * whichever wasn't stored, or worse, could present one as if it
+   * were the other at redemption time.
    */
   voucherNumber    String?
   value            Decimal
   currency         String              @default("ZAR")
-  /* REG-004: valid-from date is deliberately separate from expiresAt. */
+  /* REG-004: some vouchers aren't valid immediately (e.g. a
+   * promotional voucher activating next week) -- validFrom is
+   * deliberately separate from expiresAt, matching REG-004's explicit
+   * "valid-from date" and "valid-until date" as two distinct fields. */
   validFrom        DateTime?
   expiresAt        DateTime?
   status           WalletVoucherStatus @default(ACTIVE)

@@ -8,6 +8,7 @@ import {
   listWalletVouchersForUser,
   getWalletVoucherForUser,
   redeemWalletVoucher,
+  deleteWalletVoucher,
 } from "./wallet-voucher.service.js";
 import { parseVoucherText } from "./voucher-ocr-parser.service.js";
 
@@ -47,7 +48,9 @@ export async function registerWalletVoucherRoutes(api: FastifyInstance): Promise
        * it through the voucher-specific field parser. The caller
        * (frontend) shows these as pre-filled, editable form fields --
        * the user reviews and corrects before ever calling the real
-       * POST /wallet-vouchers below to actually save.
+       * POST /wallet-vouchers below to actually save. Barcode
+       * extraction is separate and unrelated -- that's the existing
+       * camera-based BarcodeDetector scan, not OCR at all.
        */
       scope.post<{ Querystring: { debug?: string } }>(
         "/wallet-vouchers/extract",
@@ -164,6 +167,26 @@ export async function registerWalletVoucherRoutes(api: FastifyInstance): Promise
               return reply.code(409).send({
                 error: "WALLET_VOUCHER_EXPIRED",
                 message: "This voucher has expired and can no longer be redeemed.",
+              });
+            }
+            throw error;
+          }
+        },
+      );
+
+      scope.delete<{ Params: { voucherId: string } }>(
+        "/wallet-vouchers/:voucherId",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          try {
+            await deleteWalletVoucher(scope.prisma, userId, request.params.voucherId);
+            return reply.code(204).send();
+          } catch (error) {
+            if (error instanceof Error && error.message === "WALLET_VOUCHER_NOT_FOUND") {
+              return reply.code(404).send({
+                error: "WALLET_VOUCHER_NOT_FOUND",
+                message: "Voucher was not found.",
               });
             }
             throw error;
