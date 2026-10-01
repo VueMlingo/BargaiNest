@@ -1262,13 +1262,13 @@ const App = {
 
     html +=
       '<div class="hero-stat"><div class="num">' +
-      (pendingSync ? "—" : t.points.toLocaleString("en-ZA")) +
-      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Points") + '</div></div>';
+      (pendingSync ? "Pending sync" : t.points.toLocaleString("en-ZA")) +
+      '</div><div class="lbl">Points</div></div>';
 
     html +=
       '<div class="hero-stat"><div class="num">' +
-      (pendingSync ? "—" : formatRand(t.cashback)) +
-      '</div><div class="lbl">' + (pendingSync ? "Pending sync" : "Cashback") + '</div></div>';
+      (pendingSync ? "Pending sync" : formatRand(t.cashback)) +
+      '</div><div class="lbl">Cashback</div></div>';
 
     // REG-001 follow-up: manually-captured wallet vouchers are never
     // "pending sync" -- combining them with the sync-derived voucher
@@ -3999,6 +3999,7 @@ const App = {
 
     html += '<button class="btn btn-primary btn-block" data-action="buy-again" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:12px" ' + (this.buyAgainBusy || !checkedCount || !lists.length ? "disabled" : "") + '>' +
       (this.buyAgainBusy ? "Adding to your list…" : "Buy again — add " + checkedCount + " item" + (checkedCount === 1 ? "" : "s") + " to my list") + '</button>';
+    html += '<button class="btn btn-secondary btn-block" data-action="delete-purchase" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:8px"' + (this.buyAgainBusy ? " disabled" : "") + '>Delete this receipt</button>';
 
     html += "</div>";
     return html;
@@ -4061,6 +4062,34 @@ const App = {
       this.renderOverlay();
     }
   },
+
+  async deletePurchase(purchaseId) {
+    if (!purchaseId) return;
+
+    const confirmed = window.confirm("Delete this receipt? This cannot be undone.");
+    if (!confirmed) return;
+
+    this.purchaseDetailError = "";
+    this.purchaseDetailMessage = "";
+    this.buyAgainBusy = true;
+    this.renderOverlay();
+
+    try {
+      await apiDeleteLocal("/me/purchases/" + encodeURIComponent(purchaseId));
+      this.buyAgainBusy = false;
+      this.overlay = "purchases";
+      this.purchaseDetail = null;
+      this.purchaseDetailError = "";
+      this.purchaseDetailMessage = "";
+      this.renderOverlay();
+      await this.loadPurchases();
+    } catch (error) {
+      this.buyAgainBusy = false;
+      this.purchaseDetailError = this.userFacingError(error);
+      this.renderOverlay();
+    }
+  },
+
 
   async openInsights() {
     this.overlay = "insights";
@@ -4214,11 +4243,44 @@ const App = {
 
 
   /**
+   * Issue 1a (regression testing): runs the SAME BarcodeDetector
+   * already used for live camera scanning, but against a static
+   * photo instead of a video stream -- detect() accepts any
+   * ImageBitmapSource, which includes a decoded image, not just
+   * video frames. Best-effort: returns null on any failure or lack
+   * of support, since a voucher photo not containing a readable
+   * barcode (or an older browser without BarcodeDetector at all) is
+   * a normal, expected case, not an error to surface.
+   */
+  async tryDetectBarcodeFromFile(file) {
+    try {
+      const BarcodeDetectorClass = this._barcodeDeps.getBarcodeDetectorClass();
+      if (!BarcodeDetectorClass || typeof createImageBitmap !== "function") return null;
+
+      const bitmap = await createImageBitmap(file);
+      const detector = new BarcodeDetectorClass({
+        formats: ["code_128", "ean_13", "ean_8", "upc_a", "upc_e", "qr_code"],
+      });
+      const results = await detector.detect(bitmap);
+      return results && results.length && results[0].rawValue ? results[0].rawValue : null;
+    } catch (error) {
+      return null;
+    }
+  },
+
+  /**
    * REG-004: reads the selected voucher photo, sends it for OCR +
    * field extraction, and pre-fills the add-voucher form with
    * whatever was found -- never saves anything itself. Follows the
    * exact same pattern as handleReceiptFileSelected above, reusing
    * the same base64-conversion approach rather than a second one.
+   *
+   * Issue 1a: also attempts barcode detection on this same photo (see
+   * tryDetectBarcodeFromFile above), run in parallel with the OCR
+   * server call since the two are independent -- one photo now
+   * populates both the text fields and the barcode when both are
+   * present and readable, rather than requiring a second, separate
+   * barcode-scan action.
    */
   handleVoucherFileSelected(e) {
     const file = e.target.files && e.target.files[0];
@@ -4233,12 +4295,22 @@ const App = {
     reader.onload = async () => {
       try {
         const base64 = String(reader.result || "").split(",")[1] || "";
-        const fields = await apiPost("/me/wallet-vouchers/extract", { imageBase64: base64 });
+        const [fields, detectedBarcode] = await Promise.all([
+          apiPost("/me/wallet-vouchers/extract", { imageBase64: base64 }),
+          this.tryDetectBarcodeFromFile(file),
+        ]);
         this.voucherExtracted = fields;
-        const foundAnything = fields && (fields.retailerName || fields.value != null || fields.voucherNumber || fields.expiresAt);
-        this.voucherExtractMessage = foundAnything
-          ? "We've pre-filled what we could read below -- please check it's correct before saving."
-          : "We couldn't read much from that photo. Please fill in the details manually below.";
+        if (detectedBarcode && !this.voucherFormBarcode) {
+          this.voucherFormBarcode = detectedBarcode;
+        }
+        const foundAnything = (fields && (fields.retailerName || fields.value != null || fields.voucherNumber || fields.expiresAt)) || detectedBarcode;
+        if (foundAnything) {
+          this.voucherExtractMessage = detectedBarcode
+            ? "We've pre-filled what we could read, including the barcode -- please check it's correct before saving."
+            : "We've pre-filled what we could read below -- please check it's correct before saving.";
+        } else {
+          this.voucherExtractMessage = "We couldn't read much from that photo. Please fill in the details manually below.";
+        }
       } catch (error) {
         this.voucherExtractError = this.userFacingError(error);
       } finally {
@@ -5907,6 +5979,10 @@ const App = {
 
       case "open-purchase-detail":
         this.openPurchaseDetail(data.id);
+        break;
+
+      case "delete-purchase":
+        this.deletePurchase(data.id);
         break;
 
       case "buy-again":

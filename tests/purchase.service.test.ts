@@ -3,6 +3,7 @@ import {
   createPurchase,
   listPurchasesForUser,
   getPurchaseForUser,
+  deletePurchase,
 } from "../src/modules/receipts/purchase.service.js";
 
 describe("createPurchase", () => {
@@ -92,5 +93,34 @@ describe("getPurchaseForUser", () => {
       where: { id: "purchase-1", userId: "user-1" },
       include: { items: true },
     });
+  });
+});
+
+describe("deletePurchase", () => {
+  it("deletes a purchase the user owns", async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: "p1", userId: "user-1" });
+    const del = vi.fn().mockResolvedValue({});
+    const prisma = { purchase: { findFirst, delete: del } } as any;
+
+    await deletePurchase(prisma, "user-1", "p1");
+
+    expect(del).toHaveBeenCalledWith({ where: { id: "p1" } });
+  });
+
+  it("refuses to delete a purchase that doesn't exist or isn't owned by this user", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const del = vi.fn();
+    const prisma = { purchase: { findFirst, delete: del } } as any;
+
+    await expect(deletePurchase(prisma, "user-1", "p1")).rejects.toThrow("PURCHASE_NOT_FOUND");
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("scopes the ownership check to the given user, not just the purchase id", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const prisma = { purchase: { findFirst, delete: vi.fn() } } as any;
+
+    await expect(deletePurchase(prisma, "user-1", "p1")).rejects.toThrow();
+    expect(findFirst).toHaveBeenCalledWith({ where: { id: "p1", userId: "user-1" } });
   });
 });

@@ -208,7 +208,7 @@ export async function evaluateShoppingListValue(
         },
       );
 
-    api.log.info({
+    api.log?.info?.({
       event: "BN_LIVE_PRICE_LOOKUP",
       lookup: {
         sourcesAttempted: liveResult.lookup.sourcesAttempted,
@@ -224,7 +224,7 @@ export async function evaluateShoppingListValue(
       },
     }, "BN live retailer price lookup result");
 
-    api.log.info({
+    api.log?.info?.({
       event: "BN_MATCHED_OFFERS_DIAGNOSTIC",
       intent: {
         originalText: intent.originalText,
@@ -625,7 +625,7 @@ export async function evaluateShoppingListValue(
         }
       : null;
 
-  api.log.info({ event: "BN_FINAL_SERVICE_ITEMS", items: items.map((item) => ({ description: item.description, comparable: item.comparable, bestPrice: item.bestPrice, bestRetailerId: item.bestRetailerId, bestRetailerName: item.bestRetailerName, bestCurrency: item.bestCurrency })) }, "BN final shopping-list-value service items");
+  api.log?.info?.({ event: "BN_FINAL_SERVICE_ITEMS", items: items.map((item) => ({ description: item.description, comparable: item.comparable, bestPrice: item.bestPrice, bestRetailerId: item.bestRetailerId, bestRetailerName: item.bestRetailerName, bestCurrency: item.bestCurrency })) }, "BN final shopping-list-value service items");
   return {
     shoppingListId:
       shoppingList.id,

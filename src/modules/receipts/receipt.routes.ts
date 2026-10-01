@@ -9,6 +9,7 @@ import { browsePromotionsForRetailer } from "../promotions/promotions.service.js
 import { PROMOTION_RETAILER_CONFIGS } from "../promotions/promotions.config.js";
 import {
   createPurchase,
+  deletePurchase,
   getPurchaseForUser,
   listPurchasesForUser,
 } from "./purchase.service.js";
@@ -192,6 +193,32 @@ export async function registerReceiptRoutes(api: FastifyInstance): Promise<void>
             });
           }
           return purchase;
+        },
+      );
+
+      scope.delete<{ Params: { purchaseId: string } }>(
+        "/purchases/:purchaseId",
+        async (request, reply) => {
+          const userId = getAuthenticatedUserId(request);
+
+          try {
+            await deletePurchase(
+              scope.prisma,
+              userId,
+              request.params.purchaseId,
+            );
+
+            return reply.code(204).send();
+          } catch (error) {
+            if (error instanceof Error && error.message === "PURCHASE_NOT_FOUND") {
+              return reply.code(404).send({
+                error: "PURCHASE_NOT_FOUND",
+                message: "Purchase was not found.",
+              });
+            }
+
+            throw error;
+          }
         },
       );
 

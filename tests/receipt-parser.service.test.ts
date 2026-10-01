@@ -97,4 +97,51 @@ describe("parseReceiptText", () => {
     const result = parseReceiptText("SHOPRITE\nDISCOUNT -5.00\n");
     expect(result.items).toEqual([]);
   });
+
+  it("REG-005: strips a currency-prefixed price ('R22.99') cleanly, without leaving a stray 'R' stuck on the item name", () => {
+    const result = parseReceiptText("SHOPRITE\nMilk R22.99\n");
+    expect(result.items[0]!.name).toBe("Milk");
+    expect(result.items[0]!.price).toBe(22.99);
+  });
+
+  it("REG-005's own exact acceptance example: items, subtotal, VAT, and total are all correctly separated, with a real total extracted", () => {
+    const text = [
+      "SHOPRITE",
+      "Milk       R22.99",
+      "Bread      R18.99",
+      "Sugar      R29.99",
+      "",
+      "Subtotal   R71.97",
+      "VAT        R10.80",
+      "Total      R82.77",
+    ].join("\n");
+
+    const result = parseReceiptText(text);
+
+    expect(result.items).toEqual([
+      { name: "Milk", price: 22.99 },
+      { name: "Bread", price: 18.99 },
+      { name: "Sugar", price: 29.99 },
+    ]);
+    // The critical regression this fix exists to prevent: the total
+    // must never be silently dropped, and must never appear as a
+    // fourth "item".
+    expect(result.total).toBe(82.77);
+    expect(result.items).toHaveLength(3);
+    expect(result.items.some((item) => item.name.toUpperCase().includes("TOTAL"))).toBe(false);
+    expect(result.items.some((item) => item.name.toUpperCase().includes("SUBTOTAL"))).toBe(false);
+    expect(result.items.some((item) => item.name.toUpperCase().includes("VAT"))).toBe(false);
+  });
+
+  it("REG-005: a currency-prefixed price with a space before the digits ('R 50.00') is also handled correctly", () => {
+    const result = parseReceiptText("WOOLWORTHS\nEggs R 50.00\n");
+    expect(result.items[0]!.name).toBe("Eggs");
+    expect(result.items[0]!.price).toBe(50);
+  });
+
+  it("REG-005: an unprefixed price (no 'R' at all) still works exactly as before -- this fix doesn't regress the already-working case", () => {
+    const result = parseReceiptText("SHOPRITE\nFULL CREAM MILK 1L 21.99\n");
+    expect(result.items[0]!.name).toBe("FULL CREAM MILK 1L");
+    expect(result.items[0]!.price).toBe(21.99);
+  });
 });

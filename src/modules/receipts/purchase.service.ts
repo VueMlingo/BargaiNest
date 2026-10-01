@@ -63,3 +63,28 @@ export async function getPurchaseForUser(
     include: { items: true },
   });
 }
+
+/**
+ * Deletes a purchase outright -- a receipt scanned/logged by mistake,
+ * a duplicate entry, or simply something the user no longer wants in
+ * their history. Ownership-scoped the same way every other mutation
+ * here is. PurchaseItem already has `onDelete: Cascade` on its
+ * relation to Purchase (see schema.prisma), so its line items are
+ * removed automatically by the database -- no manual item cleanup
+ * needed here.
+ */
+export async function deletePurchase(
+  prisma: PrismaClient,
+  userId: string,
+  purchaseId: string,
+): Promise<void> {
+  const purchase = await prisma.purchase.findFirst({
+    where: { id: purchaseId, userId },
+  });
+
+  if (!purchase) {
+    throw new Error("PURCHASE_NOT_FOUND");
+  }
+
+  await prisma.purchase.delete({ where: { id: purchaseId } });
+}

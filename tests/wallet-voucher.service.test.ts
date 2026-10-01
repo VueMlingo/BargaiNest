@@ -4,6 +4,7 @@ import {
   listWalletVouchersForUser,
   getWalletVoucherForUser,
   redeemWalletVoucher,
+  deleteWalletVoucher,
   computeEffectiveStatus,
 } from "../src/modules/wallet-vouchers/wallet-voucher.service.js";
 
@@ -174,6 +175,142 @@ describe("getWalletVoucherForUser", () => {
     const result = await getWalletVoucherForUser(prisma, "user-1", "voucher-1");
 
     expect(result!.effectiveStatus).toBe("ACTIVE");
+  });
+});
+
+describe("REG-008: barcode is a distinct field from voucherNumber, both survive persistence independently", () => {
+  it("stores barcode and voucherNumber as separate values, not one overwriting the other", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "v1" });
+    const prisma = {
+      walletVoucher: { create },
+      retailer: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as any;
+
+    await createWalletVoucher(prisma, "user-1", {
+      retailerName: "Woolworths",
+      barcode: "1234567890128",
+      voucherNumber: "REF-98765",
+      value: 50,
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        barcode: "1234567890128",
+        voucherNumber: "REF-98765",
+      }),
+    });
+    // The two values must genuinely differ in the stored payload --
+    // this would trivially pass if one field silently mirrored the other.
+    const storedData = create.mock.calls[0]![0].data;
+    expect(storedData.barcode).not.toBe(storedData.voucherNumber);
+  });
+
+  it("a voucher with a barcode but no voucherNumber persists voucherNumber as null, not the barcode value", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "v1" });
+    const prisma = {
+      walletVoucher: { create },
+      retailer: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as any;
+
+    await createWalletVoucher(prisma, "user-1", {
+      retailerName: "Woolworths",
+      barcode: "1234567890128",
+      value: 50,
+    });
+
+    const storedData = create.mock.calls[0]![0].data;
+    expect(storedData.barcode).toBe("1234567890128");
+    expect(storedData.voucherNumber).toBeNull();
+  });
+
+  it("a voucher retrieved later still returns both barcode and voucherNumber distinctly, for reconstitution/presentation at redemption time", async () => {
+    const findFirst = vi.fn().mockResolvedValue({
+      id: "v1",
+      status: "ACTIVE",
+      expiresAt: null,
+      barcode: "1234567890128",
+      voucherNumber: "REF-98765",
+    });
+    const prisma = { walletVoucher: { findFirst } } as any;
+
+    const result = await getWalletVoucherForUser(prisma, "user-1", "v1");
+
+    expect(result!.barcode).toBe("1234567890128");
+    expect((result as any).voucherNumber).toBe("REF-98765");
+    expect(result!.barcode).not.toBe((result as any).voucherNumber);
+  });
+
+  it("validFrom and expiresAt are captured as distinct fields, matching REG-004's explicit valid-from/valid-until split", async () => {
+    const create = vi.fn().mockResolvedValue({ id: "v1" });
+    const prisma = {
+      walletVoucher: { create },
+      retailer: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as any;
+
+    const validFrom = new Date("2026-09-01");
+    const expiresAt = new Date("2026-12-31");
+
+    await createWalletVoucher(prisma, "user-1", {
+      retailerName: "Woolworths",
+      barcode: "1234567890128",
+      value: 50,
+      validFrom,
+      expiresAt,
+    });
+
+    const storedData = create.mock.calls[0]![0].data;
+    expect(storedData.validFrom).toEqual(validFrom);
+    expect(storedData.expiresAt).toEqual(expiresAt);
+    expect(storedData.validFrom).not.toEqual(storedData.expiresAt);
+  });
+});
+
+describe("deleteWalletVoucher", () => {
+  it("deletes a voucher the user owns", async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: "v1", userId: "user-1" });
+    const del = vi.fn().mockResolvedValue({});
+    const prisma = { walletVoucher: { findFirst, delete: del } } as any;
+
+    await deleteWalletVoucher(prisma, "user-1", "v1");
+
+    expect(del).toHaveBeenCalledWith({ where: { id: "v1" } });
+  });
+
+  it("refuses to delete a voucher that doesn't exist or isn't owned by this user", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const del = vi.fn();
+    const prisma = { walletVoucher: { findFirst, delete: del } } as any;
+
+    await expect(deleteWalletVoucher(prisma, "user-1", "v1")).rejects.toThrow("WALLET_VOUCHER_NOT_FOUND");
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("allows deleting a REDEEMED voucher -- deleting is not restricted the way redeeming is", async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: "v1", userId: "user-1", status: "REDEEMED" });
+    const del = vi.fn().mockResolvedValue({});
+    const prisma = { walletVoucher: { findFirst, delete: del } } as any;
+
+    await deleteWalletVoucher(prisma, "user-1", "v1");
+    expect(del).toHaveBeenCalled();
+  });
+
+  it("allows deleting an EXPIRED voucher (a user should be able to clear out expired clutter)", async () => {
+    const findFirst = vi.fn().mockResolvedValue({
+      id: "v1", userId: "user-1", status: "ACTIVE", expiresAt: new Date("2020-01-01"),
+    });
+    const del = vi.fn().mockResolvedValue({});
+    const prisma = { walletVoucher: { findFirst, delete: del } } as any;
+
+    await deleteWalletVoucher(prisma, "user-1", "v1");
+    expect(del).toHaveBeenCalled();
+  });
+
+  it("scopes the ownership check to the given user, not just the voucher id", async () => {
+    const findFirst = vi.fn().mockResolvedValue(null);
+    const prisma = { walletVoucher: { findFirst, delete: vi.fn() } } as any;
+
+    await expect(deleteWalletVoucher(prisma, "user-1", "v1")).rejects.toThrow();
+    expect(findFirst).toHaveBeenCalledWith({ where: { id: "v1", userId: "user-1" } });
   });
 });
 
