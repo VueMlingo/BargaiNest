@@ -145,7 +145,7 @@ export async function registerRoutes(
             })
           : new RetailerSearchPriceAdapter(WOOLWORTHS_CONFIG),
       PICK_N_PAY_LIVE_SEARCH: () =>
-        new PnpHybrisPriceLookupAdapter(""),
+        new PnpHybrisPriceLookupAdapter(env.PICK_N_PAY_DEFAULT_STORE_CODE ?? ""),
       SPAR_LIVE_SEARCH: () => new RetailerSearchPriceAdapter(SPAR_CONFIG),
     });
 

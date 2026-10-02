@@ -82,25 +82,38 @@ describe("browsePromotionsViaLiveSearch (BN-030)", () => {
     expect(errors[0]![0]).toContain("Milk");
   });
 
-  it("applies searchTerm filtering the same way browsePromotionsForRetailer does", async () => {
+  it("BN-030 fix: a real search term is sent to the adapter's search AS THE QUERY itself, not used only to post-filter a fixed set of default categories -- searching for a term outside the defaults (e.g. 'chicken') must actually search for it, not silently return nothing", async () => {
     const adapter = makeAdapter({
-      Milk: [
-        { name: "Full Cream Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
+      chicken: [
+        { name: "Chicken Breasts 1kg", price: 65, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
       ],
-      Bread: [
-        { name: "White Bread 700g", price: 18, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
-      ],
+      // The old (buggy) behaviour would have searched these default
+      // categories instead and found nothing for "chicken" at all.
+      Milk: [{ name: "Full Cream Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" }],
     });
 
     const result = await browsePromotionsViaLiveSearch(
       { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
-      { searchTerm: "milk" },
-      undefined,
-      ["Milk", "Bread"],
+      { searchTerm: "chicken" },
     );
 
     expect(result).toHaveLength(1);
-    expect(result[0]!.name).toContain("Milk");
+    expect(result[0]!.name).toBe("Chicken Breasts 1kg");
+  });
+
+  it("with no search term at all, falls back to the default categories (the general 'browse specials' case)", async () => {
+    const adapter = makeAdapter({
+      Milk: [{ name: "Full Cream Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" }],
+      Bread: [{ name: "White Bread 700g", price: 18, currency: "ZAR", isPromotion: true, extractionMethod: "API" }],
+      Cola: [], Tea: [], Sugar: [],
+    });
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
+      {},
+    );
+
+    expect(result).toHaveLength(2);
   });
 
   it("an item missing a usable price is skipped, same as browsePromotionsForRetailer's existing behaviour", async () => {

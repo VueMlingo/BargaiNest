@@ -51,14 +51,25 @@ export function buildLiveSearchPromotionConfigs(): BrowsePromotionsViaLiveSearch
     sourceType: "LIVE_SEARCH",
   };
 
-  if (env.PICK_N_PAY_DEFAULT_STORE_CODE) {
-    configs.push({
-      retailerCode: "PICK_N_PAY",
-      retailerName: "Pick n Pay",
-      adapter: new PnpHybrisPriceLookupAdapter(env.PICK_N_PAY_DEFAULT_STORE_CODE),
-      context: placeholderContext,
-    });
-  }
+  /*
+   * Unlike the main price-lookup registration (app/routes.ts), Browse
+   * Specials doesn't require a specific store code to be configured --
+   * a general "what's on special right now" browse isn't tied to a
+   * specific purchase the way a price lookup for an actual shopping-list
+   * item is, so this is always included rather than gated behind
+   * PICK_N_PAY_DEFAULT_STORE_CODE being set. If an empty store code
+   * genuinely returns nothing usable from Pick n Pay's API, the
+   * existing per-category error isolation in
+   * browsePromotionsViaLiveSearch already handles that gracefully --
+   * same as any other retailer-side failure -- rather than this
+   * silently omitting Pick n Pay from the feature entirely.
+   */
+  configs.push({
+    retailerCode: "PICK_N_PAY",
+    retailerName: "Pick n Pay",
+    adapter: new PnpHybrisPriceLookupAdapter(env.PICK_N_PAY_DEFAULT_STORE_CODE ?? ""),
+    context: placeholderContext,
+  });
 
   if (env.WOOLWORTHS_CONSTRUCTOR_KEY) {
     configs.push({

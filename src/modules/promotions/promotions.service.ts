@@ -184,8 +184,20 @@ export async function browsePromotionsViaLiveSearch(
   config: BrowsePromotionsViaLiveSearchConfig,
   options: BrowsePromotionsOptions = {},
   onSourceError?: (sourceUrl: string, error: unknown) => void,
-  searchCategories: readonly string[] = DEFAULT_SEARCH_CATEGORIES,
+  defaultCategories: readonly string[] = DEFAULT_SEARCH_CATEGORIES,
 ): Promise<Promotion[]> {
+  /*
+   * A real search term is sent to the retailer's own search API as
+   * the actual query -- these are real product-search providers, not
+   * a fixed local list, so "chicken" should search for "chicken",
+   * not search five unrelated default categories and then discard
+   * everything that doesn't happen to contain "chicken" in its name
+   * (which, for any term outside the five defaults, always produced
+   * zero results regardless of what the retailer actually has on
+   * promotion). The default categories exist only for the no-term
+   * "just show me what's on special" browse case.
+   */
+  const searchCategories = options.searchTerm ? [options.searchTerm] : defaultCategories;
   const promotions: Promotion[] = [];
 
   for (const category of searchCategories) {
@@ -212,11 +224,6 @@ export async function browsePromotionsViaLiveSearch(
       // per-source isolation principle as browsePromotionsForRetailer.
       onSourceError?.(`${config.retailerName}:${category}`, error);
     }
-  }
-
-  if (options.searchTerm) {
-    const term = options.searchTerm.toLowerCase();
-    return promotions.filter((p) => p.name.toLowerCase().includes(term));
   }
 
   return promotions;
