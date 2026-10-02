@@ -1233,6 +1233,39 @@ select:focus-visible {
    Overlays
    ========================================================================== */
 
+.app-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+
+  background: rgba(24,42,74,0.45);
+
+  z-index: 200;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 20px;
+}
+
+.app-dialog-panel {
+  background: var(--surface);
+
+  width: 100%;
+  max-width: 360px;
+
+  border-radius: var(--radius-lg);
+
+  padding: 20px;
+}
+
+.app-dialog-message {
+  font-size: 14px;
+  color: #1A2433;
+  margin: 0 0 14px;
+  white-space: pre-wrap;
+}
+
 .overlay-backdrop {
   position: fixed;
   inset: 0;

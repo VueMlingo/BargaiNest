@@ -2,6 +2,7 @@ import type {
   NormalizedCatalogueItem,
   RawCatalogueItem,
 } from "./retail-catalogue.types.js";
+import { extractPackSize } from "../shopping-intent/pack-size.util.js";
 
 function normalizeText(value: string): string {
   return value
@@ -95,8 +96,23 @@ export function normalizeCatalogueItem(
     brand:
       item.brand?.trim() || null,
 
+    /*
+     * BN-029/031: Pick n Pay's Hybris adapter and Woolworths'
+     * Constructor.io adapter never populate a structured packSize at
+     * all (confirmed directly in both adapters' source) -- only the
+     * raw product name, which usually has the size embedded in free
+     * text ("Clover Fresh Milk 2L"). Falling back to extracting it
+     * from rawName here, using the exact same logic that parses the
+     * user's own shopping-list text (shopping-intent.service.ts, via
+     * this shared util), is what makes retailer-offer.service.ts's
+     * pack-size matching actually able to match these retailers at
+     * all once the user's request has an explicit size -- without
+     * this, every offer from these two retailers was a guaranteed
+     * "weak match" rejection whenever that was the case, regardless
+     * of whether the product itself was otherwise correct.
+     */
     packSize:
-      item.packSize?.trim() || null,
+      item.packSize?.trim() || extractPackSize(rawName),
 
     unit:
       item.unit?.trim() || null,

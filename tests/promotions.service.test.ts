@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { browsePromotions, browsePromotionsForRetailer } from "../src/modules/promotions/promotions.service.js";
+import { browsePromotions, browsePromotionsForRetailer, browsePromotionsViaLiveSearch } from "../src/modules/promotions/promotions.service.js";
 import type { PromotionRetailerConfig } from "../src/modules/promotions/promotions.service.js";
 
 function makeConfig(overrides: Partial<PromotionRetailerConfig> = {}): PromotionRetailerConfig {
@@ -12,6 +12,112 @@ function makeConfig(overrides: Partial<PromotionRetailerConfig> = {}): Promotion
     ...overrides,
   };
 }
+
+describe("browsePromotionsViaLiveSearch (BN-030)", () => {
+  function makeAdapter(responses: Record<string, any[]>) {
+    return {
+      adapterKey: "TEST_LIVE_SEARCH",
+      lookup: async (_context: any, query: { name?: string }) => responses[query.name ?? ""] ?? [],
+    };
+  }
+
+  it("searches each category and keeps only items the adapter itself reports as promotional", async () => {
+    const adapter = makeAdapter({
+      Milk: [
+        { name: "Full Cream Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
+        { name: "Low Fat Milk 1L", price: 15, currency: "ZAR", isPromotion: false, extractionMethod: "API" },
+      ],
+      Bread: [
+        { name: "White Bread 700g", price: 18, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
+      ],
+    });
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
+      {},
+      undefined,
+      ["Milk", "Bread"],
+    );
+
+    expect(result).toHaveLength(2);
+    expect(result.some((p) => p.name === "Low Fat Milk 1L")).toBe(false);
+    expect(result.every((p) => p.retailerCode === "PICK_N_PAY")).toBe(true);
+  });
+
+  it("extracts packSize from the product name when the adapter doesn't supply one (exactly the PnP/Woolworths case)", async () => {
+    const adapter = makeAdapter({
+      Milk: [{ name: "Clover Fresh Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" }],
+    });
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "WOOLWORTHS", retailerName: "Woolworths", adapter: adapter as any, context: {} as any },
+      {},
+      undefined,
+      ["Milk"],
+    );
+
+    expect(result[0]!.packSize).toBe("2l");
+  });
+
+  it("BN-030: one category's search failing does not prevent the others from being tried, and does not fail the whole browse", async () => {
+    const adapter = {
+      adapterKey: "TEST_LIVE_SEARCH",
+      lookup: async (_context: any, query: { name?: string }) => {
+        if (query.name === "Milk") throw new Error("Milk search failed");
+        return [{ name: "White Bread 700g", price: 18, currency: "ZAR", isPromotion: true, extractionMethod: "API" }];
+      },
+    };
+    const errors: Array<[string, unknown]> = [];
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
+      {},
+      (source, error) => errors.push([source, error]),
+      ["Milk", "Bread"],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toBe("White Bread 700g");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]![0]).toContain("Milk");
+  });
+
+  it("applies searchTerm filtering the same way browsePromotionsForRetailer does", async () => {
+    const adapter = makeAdapter({
+      Milk: [
+        { name: "Full Cream Milk 2L", price: 25, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
+      ],
+      Bread: [
+        { name: "White Bread 700g", price: 18, currency: "ZAR", isPromotion: true, extractionMethod: "API" },
+      ],
+    });
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
+      { searchTerm: "milk" },
+      undefined,
+      ["Milk", "Bread"],
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]!.name).toContain("Milk");
+  });
+
+  it("an item missing a usable price is skipped, same as browsePromotionsForRetailer's existing behaviour", async () => {
+    const adapter = makeAdapter({
+      Milk: [{ name: "Full Cream Milk 2L", currency: "ZAR", isPromotion: true, extractionMethod: "API" } as any],
+    });
+
+    const result = await browsePromotionsViaLiveSearch(
+      { retailerCode: "PICK_N_PAY", retailerName: "Pick n Pay", adapter: adapter as any, context: {} as any },
+      {},
+      undefined,
+      ["Milk"],
+    );
+
+    expect(result).toHaveLength(0);
+  });
+});
 
 describe("browsePromotionsForRetailer", () => {
   it("returns only items flagged isPromotion, filtering out regular priced items", async () => {

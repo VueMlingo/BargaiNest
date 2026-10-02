@@ -786,6 +786,114 @@ const App = {
 
   },
 
+  /**
+   * BN-027/BN-028: application-level replacements for window.prompt()
+   * and window.confirm(). Two independent problems motivated this:
+   *
+   * 1. (BN-028) A native prompt()/confirm() is rendered by the
+   *    browser itself, prefixed with the page's own origin
+   *    ("anthillsolutions.co.za says..."), which isn't something the
+   *    app can control or style away.
+   * 2. (BN-027) Browsers let a user suppress further native dialogs
+   *    from a page entirely (e.g. after several appear in quick
+   *    succession) -- this is a browser-level setting, nothing to do
+   *    with any preference BargaiNest itself stores. Once suppressed,
+   *    window.prompt() returns null immediately, without ever
+   *    showing anything -- which the calling code could only
+   *    distinguish from the user deliberately cancelling by accident,
+   *    silently losing the required-input path entirely (exactly
+   *    BN-027's reported symptom).
+   *
+   * Both are solved the same way: these are ordinary HTML rendered by
+   * the app itself, not native browser dialogs, so neither the origin
+   * wording nor the browser's own suppression mechanism can apply to
+   * them at all. The Promise-based API mirrors window.prompt/confirm
+   * closely (resolves to the entered string or null; resolves to
+   * true or false) specifically so existing call sites only need
+   * `window.prompt(x)` changed to `await this.showAppPrompt(x)`.
+   */
+  showAppPrompt(message, defaultValue) {
+    return new Promise((resolve) => {
+      this._appDialog = { type: "prompt", message, value: defaultValue || "", resolve };
+      this.renderAppDialog();
+    });
+  },
+
+  showAppConfirm(message) {
+    return new Promise((resolve) => {
+      this._appDialog = { type: "confirm", message, resolve };
+      this.renderAppDialog();
+    });
+  },
+
+  renderAppDialog() {
+    const root = document.getElementById("app-dialog-root");
+    if (!root) return;
+
+    const dialog = this._appDialog;
+    if (!dialog) {
+      root.innerHTML = "";
+      return;
+    }
+
+    let html = '<div class="app-dialog-backdrop" id="app-dialog-backdrop"><div class="app-dialog-panel">';
+    html += '<p class="app-dialog-message">' + this.escapeHtml(dialog.message) + "</p>";
+    if (dialog.type === "prompt") {
+      html += '<input id="app-dialog-input" class="text-input" type="text" value="' + this.escapeAttr(dialog.value || "") + '">';
+    }
+    html += '<div style="display:flex;gap:8px;margin-top:16px">';
+    html += '<button class="btn btn-secondary" style="flex:1" id="app-dialog-cancel">Cancel</button>';
+    html += '<button class="btn btn-primary" style="flex:1" id="app-dialog-confirm">' + (dialog.type === "prompt" ? "OK" : "Confirm") + "</button>";
+    html += "</div></div></div>";
+
+    root.innerHTML = html;
+
+    const resolveDialog = (value) => {
+      const resolveFn = this._appDialog && this._appDialog.resolve;
+      this._appDialog = null;
+      root.innerHTML = "";
+      if (resolveFn) resolveFn(value);
+    };
+
+    const confirmBtn = document.getElementById("app-dialog-confirm");
+    const cancelBtn = document.getElementById("app-dialog-cancel");
+    const input = document.getElementById("app-dialog-input");
+    const backdrop = document.getElementById("app-dialog-backdrop");
+
+    if (confirmBtn) {
+      confirmBtn.addEventListener("click", () => {
+        resolveDialog(dialog.type === "prompt" ? (input ? input.value : "") : true);
+      });
+    }
+    if (cancelBtn) {
+      cancelBtn.addEventListener("click", () => {
+        resolveDialog(dialog.type === "prompt" ? null : false);
+      });
+    }
+    // Clicking the backdrop itself (not the panel) cancels, matching
+    // how the existing overlay system already behaves elsewhere.
+    if (backdrop) {
+      backdrop.addEventListener("click", (e) => {
+        if (e.target === backdrop) {
+          resolveDialog(dialog.type === "prompt" ? null : false);
+        }
+      });
+    }
+    if (input) {
+      input.focus();
+      input.select();
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          resolveDialog(input.value);
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          resolveDialog(null);
+        }
+      });
+    }
+  },
+
 
   tickClock() {
 
@@ -1876,7 +1984,7 @@ const App = {
 
   async createShoppingList() {
     if (this.shoppingListBusy) return;
-    const name = window.prompt('Name your shopping list');
+    const name = await this.showAppPrompt('Name your shopping list');
     if (name === null) return;
     const trimmed = name.trim();
     if (!trimmed) { this.toast('Please enter a list name'); return; }
@@ -1978,7 +2086,8 @@ const App = {
   },
 
   async removeShoppingItem(itemId) {
-    if (this.shoppingListBusy || !window.confirm('Remove this item from the list?')) return;
+    if (this.shoppingListBusy) return;
+    if (!(await this.showAppConfirm('Remove this item from the list?'))) return;
     const listId = this.selectedShoppingListId;
     this.shoppingListBusy = true;
     this.renderView();
@@ -2002,7 +2111,7 @@ const App = {
     if (this.shoppingListBusy) return;
     const list = (this.shoppingLists || []).find((entry) => entry.id === listId);
     if (!list) return;
-    const name = window.prompt('Rename your shopping list', list.name || '');
+    const name = await this.showAppPrompt('Rename your shopping list', list.name || '');
     if (name === null) return;
     const trimmed = name.trim();
     if (!trimmed) { this.toast('Please enter a list name'); return; }
@@ -2032,7 +2141,7 @@ const App = {
     const message = itemCount
       ? 'Delete “' + String(list.name || 'this list') + '”? This will also delete its ' + itemCount + (itemCount === 1 ? ' item.' : ' items.')
       : 'Delete “' + String(list.name || 'this list') + '”?';
-    if (!window.confirm(message)) return;
+    if (!(await this.showAppConfirm(message))) return;
     this.shoppingListBusy = true;
     this.shoppingListError = '';
     try {
@@ -2047,7 +2156,8 @@ const App = {
   },
 
   async completeShoppingList(listId) {
-    if (this.shoppingListBusy || !window.confirm('Mark this shopping list as complete?')) return;
+    if (this.shoppingListBusy) return;
+    if (!(await this.showAppConfirm('Mark this shopping list as complete?'))) return;
     this.shoppingListBusy = true;
     try {
       await apiPatchLocal('/me/shopping-lists/' + encodeURIComponent(listId), { status: 'COMPLETED' });
@@ -3643,12 +3753,24 @@ const App = {
         }
         html += '<div class="bn-detail-list">';
         promotions.forEach((promo) => {
+          const nameWithSize = promo.packSize
+            ? this.escapeHtml(promo.name) + ' <span style="color:var(--grey-muted);font-weight:400">(' + this.escapeHtml(promo.packSize) + ')</span>'
+            : this.escapeHtml(promo.name);
+          // Regular (was) price is shown struck through next to the
+          // current special price, distinguishing promotional from
+          // regular pricing per BN-030's data contract -- only shown
+          // when the source actually provides it and it's genuinely
+          // higher than the current price.
+          const priceHtml = (promo.wasPrice != null && promo.wasPrice > promo.price)
+            ? '<span style="text-decoration:line-through;color:var(--grey-muted);font-size:12px;margin-right:6px">' + formatRand(promo.wasPrice) + '</span><strong>' + formatRand(promo.price) + '</strong>'
+            : '<strong>' + formatRand(promo.price) + '</strong>';
+
           html +=
             '<div class="bn-detail-row" style="padding:12px 0;border-bottom:1px solid var(--line)"><div>' +
-            '<span class="bn-detail-label">' + this.escapeHtml(promo.name) + '</span>' +
+            '<span class="bn-detail-label">' + nameWithSize + '</span>' +
             '<div style="font-size:11px;color:var(--grey-muted);margin-top:2px">' + this.escapeHtml(promo.retailerName) +
             (promo.promotionText ? " · " + this.escapeHtml(promo.promotionText) : "") + '</div></div>' +
-            '<strong>' + formatRand(promo.price) + '</strong></div>';
+            priceHtml + '</div>';
         });
         html += "</div>";
       }
@@ -3999,7 +4121,9 @@ const App = {
 
     html += '<button class="btn btn-primary btn-block" data-action="buy-again" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:12px" ' + (this.buyAgainBusy || !checkedCount || !lists.length ? "disabled" : "") + '>' +
       (this.buyAgainBusy ? "Adding to your list…" : "Buy again — add " + checkedCount + " item" + (checkedCount === 1 ? "" : "s") + " to my list") + '</button>';
-    html += '<button class="btn btn-secondary btn-block" data-action="delete-purchase" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:8px"' + (this.buyAgainBusy ? " disabled" : "") + '>Delete this receipt</button>';
+
+    html += '<button class="btn btn-secondary btn-block" data-action="delete-purchase" data-id="' + this.escapeAttr(purchase.id) + '" style="margin-top:10px" ' + (this.purchaseDeleteBusy ? "disabled" : "") + '>' +
+      (this.purchaseDeleteBusy ? "Deleting…" : "Delete this receipt") + '</button>';
 
     html += "</div>";
     return html;
@@ -4063,33 +4187,31 @@ const App = {
     }
   },
 
+  /**
+   * A real, permanent delete -- for a receipt logged by mistake, a
+   * duplicate scan, or anything else the user wants gone from their
+   * purchase history. Confirmed first, since this can't be undone.
+   */
   async deletePurchase(purchaseId) {
-    if (!purchaseId) return;
+    if (this.purchaseDeleteBusy) return;
+    if (!confirm("Delete this receipt? This can't be undone.")) return;
 
-    const confirmed = window.confirm("Delete this receipt? This cannot be undone.");
-    if (!confirmed) return;
-
+    this.purchaseDeleteBusy = true;
     this.purchaseDetailError = "";
-    this.purchaseDetailMessage = "";
-    this.buyAgainBusy = true;
     this.renderOverlay();
 
     try {
       await apiDeleteLocal("/me/purchases/" + encodeURIComponent(purchaseId));
-      this.buyAgainBusy = false;
+      this.purchaseDeleteBusy = false;
       this.overlay = "purchases";
-      this.purchaseDetail = null;
-      this.purchaseDetailError = "";
-      this.purchaseDetailMessage = "";
       this.renderOverlay();
-      await this.loadPurchases();
+      await this.openPurchases();
     } catch (error) {
-      this.buyAgainBusy = false;
+      this.purchaseDeleteBusy = false;
       this.purchaseDetailError = this.userFacingError(error);
       this.renderOverlay();
     }
   },
-
 
   async openInsights() {
     this.overlay = "insights";
@@ -5981,16 +6103,16 @@ const App = {
         this.openPurchaseDetail(data.id);
         break;
 
-      case "delete-purchase":
-        this.deletePurchase(data.id);
-        break;
-
       case "buy-again":
         this.buyAgain(data.id);
         break;
 
       case "toggle-buy-again-item":
         this.toggleBuyAgainItem(Number(data.index));
+        break;
+
+      case "delete-purchase":
+        this.deletePurchase(data.id);
         break;
 
       case "start-barcode-scan":

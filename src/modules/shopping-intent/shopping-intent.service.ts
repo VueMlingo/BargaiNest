@@ -7,6 +7,7 @@ import type {
 import {
   SHOPPING_BRAND_VOCABULARY,
 } from "./shopping-intent.vocabulary.js";
+import { extractPackSize } from "./pack-size.util.js";
 
 function normalizeText(value: string): string {
   return value
@@ -102,21 +103,13 @@ function inferAttributes(
    * all three appear in real product names and OCR'd receipt/label
    * text.
    */
-  const multipackMatch = normalizedText.match(
-    /\b(\d+)\s?[x×]\s?(\d+(?:\.\d+)?)\s?(kg|g|l|ml)\b/i,
-  );
-
-  if (multipackMatch) {
-    const [, packCount, unitSize, unit] = multipackMatch;
-    attributes.packSize = normalizeText(`${packCount} x ${unitSize}${unit}`);
-  } else {
-    const packSizeMatch = normalizedText.match(
-      /\b(\d+(?:\.\d+)?)\s?(kg|g|l|ml)\b/i,
-    );
-
-    if (packSizeMatch?.[0]) {
-      attributes.packSize = normalizeText(packSizeMatch[0]);
-    }
+  // BN-031: now shared with retail-catalogue.normalizer.ts's own
+  // packSize fallback (see pack-size.util.ts) -- both sides of a
+  // retailer-offer match must agree on the exact same normalized
+  // value for matching to work at all.
+  const extractedPackSize = extractPackSize(normalizedText);
+  if (extractedPackSize) {
+    attributes.packSize = extractedPackSize;
   }
 
   if (/\b(full cream|full-cream)\b/i.test(normalizedText)) {

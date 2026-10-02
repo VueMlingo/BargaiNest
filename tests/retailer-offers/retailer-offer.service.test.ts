@@ -320,3 +320,51 @@ describe("matchOffersToIntent", () => {
     );
   });
 });
+
+describe("BN-029/BN-031: matching no longer rejects offers from adapters with no structured packSize", () => {
+  function contextFor(requestedText: string) {
+    return {
+      retailerId: retailer.id,
+      retailerCode: retailer.code,
+      retailerName: retailer.name,
+      intent: createShoppingIntent({ text: requestedText }),
+    };
+  }
+
+  it("confirms the pre-fix failure mode: an offer with NO packSize at all (exactly what PnP Hybris / Woolworths Constructor.io returned before the normalizer fallback) is rejected as a weak match whenever the user's request has an explicit size", () => {
+    const [result] = matchOffersToIntent(
+      contextFor("Milk 2L"),
+      [offer({ name: "Clover Fresh Full Cream Milk 2L", packSize: null })],
+    );
+
+    expect(result!.matchQuality).toBe("WEAK");
+    expect(result!.matchScore).toBe(0);
+  });
+
+  it("confirms the fix: once packSize is populated (via retail-catalogue.normalizer.ts's new fallback, extracting it from the same product name), pack size itself is no longer the reason for rejection, and the match score is strictly higher than with no packSize at all", () => {
+    const withoutPackSize = matchOffersToIntent(
+      contextFor("Milk 2L"),
+      [offer({ name: "Clover Fresh Full Cream Milk 2L", packSize: null })],
+    )[0]!;
+    const withPackSize = matchOffersToIntent(
+      contextFor("Milk 2L"),
+      // packSize here is exactly what normalizeCatalogueItem's new
+      // fallback would now produce from this same product name --
+      // same offer, same name, only the fix applied.
+      [offer({ name: "Clover Fresh Full Cream Milk 2L", packSize: "2l" })],
+    )[0]!;
+
+    expect(withoutPackSize.matchReason).toContain("pack size does not match");
+    expect(withPackSize.matchReason).toContain("pack size matches");
+    expect(withPackSize.matchScore).toBeGreaterThan(withoutPackSize.matchScore);
+  });
+
+  it("the fix does not cause a genuine size mismatch to be accepted -- Milk 2L requested against a 1L offer (size now known, from the name) is still correctly rejected", () => {
+    const [result] = matchOffersToIntent(
+      contextFor("Milk 2L"),
+      [offer({ name: "Clover Fresh Full Cream Milk 1L", packSize: "1l" })],
+    );
+
+    expect(result!.matchQuality).toBe("WEAK");
+  });
+});

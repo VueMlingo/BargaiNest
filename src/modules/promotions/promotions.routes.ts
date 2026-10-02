@@ -2,8 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { requireAuth } from "../auth/auth.middleware.js";
-import { browsePromotions } from "./promotions.service.js";
-import { PROMOTION_RETAILER_CONFIGS } from "./promotions.config.js";
+import { browsePromotions, browsePromotionsViaLiveSearch, type Promotion } from "./promotions.service.js";
+import { PROMOTION_RETAILER_CONFIGS, buildLiveSearchPromotionConfigs } from "./promotions.config.js";
 
 const querySchema = z.object({
   q: z.string().trim().max(191).optional(),
@@ -30,32 +30,53 @@ export async function registerPromotionsRoutes(api: FastifyInstance): Promise<vo
           return reply.code(400).send({ error: "INVALID_REQUEST", message: "Invalid query parameters." });
         }
 
-        const configs = parsed.data.retailer
-          ? PROMOTION_RETAILER_CONFIGS.filter(
-              (c) => c.retailerCode === parsed.data.retailer!.toUpperCase(),
-            )
+        const requestedRetailer = parsed.data.retailer?.toUpperCase();
+
+        const discoveryConfigs = requestedRetailer
+          ? PROMOTION_RETAILER_CONFIGS.filter((c) => c.retailerCode === requestedRetailer)
           : PROMOTION_RETAILER_CONFIGS;
 
-        const errors: { sourceUrl: string; message: string }[] = [];
+        const liveSearchConfigs = requestedRetailer
+          ? buildLiveSearchPromotionConfigs().filter((c) => c.retailerCode === requestedRetailer)
+          : buildLiveSearchPromotionConfigs();
 
-        const promotions = await browsePromotions(
-          configs,
-          parsed.data.q !== undefined ? { searchTerm: parsed.data.q } : {},
-          (sourceUrl, error) => {
-            request.log.warn({ sourceUrl, error }, "promotion source failed, skipped");
-            errors.push({
-              sourceUrl,
-              message: error instanceof Error ? error.message : "Unknown error",
-            });
-          },
-        );
+        const browseOptions = parsed.data.q !== undefined ? { searchTerm: parsed.data.q } : {};
+        const errors: { sourceUrl: string; message: string }[] = [];
+        const onSourceError = (sourceUrl: string, error: unknown) => {
+          request.log.warn({ sourceUrl, error }, "promotion source failed, skipped");
+          errors.push({
+            sourceUrl,
+            message: error instanceof Error ? error.message : "Unknown error",
+          });
+        };
+
+        /*
+         * BN-030: one retailer's source failing -- whichever path it
+         * comes through -- must not prevent any other retailer's
+         * promotions from being returned. Promise.all here is safe
+         * precisely because each underlying browse function already
+         * catches its own per-source errors internally (see
+         * browsePromotionsForRetailer / browsePromotionsViaLiveSearch)
+         * and reports them via onSourceError rather than rejecting.
+         */
+        const [discoveryPromotions, ...liveSearchResults] = await Promise.all([
+          browsePromotions(discoveryConfigs, browseOptions, onSourceError),
+          ...liveSearchConfigs.map((config) =>
+            browsePromotionsViaLiveSearch(config, browseOptions, onSourceError),
+          ),
+        ]);
+
+        const promotions: Promotion[] = [
+          ...discoveryPromotions,
+          ...liveSearchResults.flat(),
+        ];
 
         return reply.send({ promotions, sourcesFailed: errors.length });
       });
 
       scope.get("/promotions/retailers", async (_request, reply) => {
         return reply.send(
-          PROMOTION_RETAILER_CONFIGS.map((c) => ({
+          [...PROMOTION_RETAILER_CONFIGS, ...buildLiveSearchPromotionConfigs()].map((c) => ({
             code: c.retailerCode,
             name: c.retailerName,
           })),
