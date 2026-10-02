@@ -20,8 +20,19 @@ export function buildApp() {
     pluginTimeout: 30000
   });
 
+  const allowedCorsOrigins = new Set([
+    env.CORS_ORIGIN,
+    "https://anthillsolutions.co.za"
+  ]);
+
   app.register(cors, {
-    origin: env.CORS_ORIGIN,
+    origin: (origin, callback) => {
+      if (!origin || allowedCorsOrigins.has(origin)) {
+        callback(null, origin || env.CORS_ORIGIN);
+      } else {
+        callback(null, false);
+      }
+    },
     credentials: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
   });
