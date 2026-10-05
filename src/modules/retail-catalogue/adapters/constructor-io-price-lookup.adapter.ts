@@ -181,7 +181,7 @@ export function makeWoolworthsPriceExtractor(defaultZone: "p10" | "p30" | "p60")
       // so it's never treated as one here either.
       const wasPrice = wasPriceRaw && wasPriceRaw > 0 ? wasPriceRaw : null;
 
-      const promoText = typeof data.promo === "string" ? data.promo : null;
+      const promoText = typeof data.promo === "string" ? data.promo : Array.isArray(data.promo) ? data.promo.filter((entry): entry is string => typeof entry === "string").join(" ") : null;
       const loyaltyPrice = promoText ? parseLoyaltyPriceFromPromoText(promoText, regularPrice) : null;
 
       return {
